@@ -1,5 +1,9 @@
 # agent-crew-spec
 
+[![Board](https://img.shields.io/badge/Board-View%20Kanban-0d1117?style=flat&logo=github)](./BOARD.md)
+[![GitHub Pages](https://img.shields.io/badge/Live%20Board-GitHub%20Pages-blue?style=flat&logo=github)](https://meierdar.github.io/agent-crew-spec)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
+
 A zero-dependency, Git-native convention for managing AI coding agents like a team. No CLI to install. No runtime. Just Markdown files and a folder structure that any agent can read.
 
 ## The Problem
@@ -22,22 +26,28 @@ Everything lives in a `.ai/` folder inside your repo. Agents read it. Humans wri
 your-project/
 ├── CLAUDE.md              ← Entry point for Claude Code
 ├── .cursorrules           ← Entry point for Cursor
-├── .ai/
-│   ├── README.md          ← How this system works
-│   ├── dod.md             ← Definition of Done (automated + manual checks)
-│   ├── BOARD.md           ← Auto-generated Kanban view (see below)
-│   ├── epics/
-│   │   └── E001-*.md      ← Feature-level goals
-│   ├── stories/
-│   │   └── E001-S001-*.md ← Atomic work units (one agent session)
-│   ├── roles/
-│   │   ├── defaults/      ← Blueprint-provided role definitions
-│   │   └── project/       ← Project-specific overrides
-│   └── templates/
-│       ├── epic.md
-│       └── story.md
-├── ai-backlog             ← Optional: CLI for terminal Kanban
-└── ai-board-gen           ← Optional: generates BOARD.md from frontmatter
+├── BOARD.md               ← Auto-generated Kanban view (root = visible on GitHub)
+├── bin/
+│   ├── ai-backlog         ← CLI for terminal Kanban queries
+│   ├── ai-board-gen       ← Generates BOARD.md from frontmatter
+│   ├── ai-board-html      ← Generates HTML board for GitHub Pages
+│   └── ai-init            ← Bootstrap agent-crew-spec into a new project
+├── .github/workflows/
+│   ├── update-board.yml   ← Auto-updates BOARD.md on push
+│   └── pages.yml          ← Deploys HTML board to GitHub Pages
+└── .ai/
+    ├── README.md          ← How this system works
+    ├── dod.md             ← Definition of Done (automated + manual checks)
+    ├── epics/
+    │   └── E001-*.md      ← Feature-level goals
+    ├── stories/
+    │   └── E001-S001-*.md ← Atomic work units (one agent session)
+    ├── roles/
+    │   ├── defaults/      ← Blueprint-provided role definitions
+    │   └── project/       ← Project-specific overrides
+    └── templates/
+        ├── epic.md
+        └── story.md
 ```
 
 ## How It Works
@@ -95,17 +105,32 @@ Check the acceptance criteria. Verify the DoD. Set `status: done`.
 Since status lives in YAML frontmatter, a simple bash script can generate a readable `BOARD.md`:
 
 ```bash
-./ai-board-gen > .ai/BOARD.md
+./bin/ai-board-gen > BOARD.md
 ```
 
-A GitHub Action (`.github/workflows/update-board.yml`) runs this automatically on every push to `.ai/stories/` or `.ai/epics/`. The result is a Kanban-style view rendered directly on GitHub — no external tools needed.
+`BOARD.md` lives at the **project root** so GitHub renders a link to it directly in the file browser, alongside README, Contributing, and License.
+
+A GitHub Action (`.github/workflows/update-board.yml`) runs this automatically on every push to `.ai/stories/` or `.ai/epics/` — no manual step needed.
+
+## Live HTML Board (GitHub Pages)
+
+In addition to the Markdown board, a second Action (`.github/workflows/pages.yml`) generates a full HTML Kanban board and deploys it to GitHub Pages:
+
+```bash
+./bin/ai-board-html > _site/index.html
+```
+
+To enable:
+1. Go to **Settings → Pages → Source** and select **GitHub Actions**
+2. Set `REPO_URL` in `.github/workflows/pages.yml` to your repo URL for clickable story links
+3. Push a story change — the board deploys automatically
 
 You can also query the backlog from your terminal:
 
 ```bash
-./ai-backlog status              # Kanban overview
-./ai-backlog list --epic E001    # Filter by epic
-./ai-backlog list --status ready # Filter by status
+./bin/ai-backlog status              # Kanban overview
+./bin/ai-backlog list --epic E001    # Filter by epic
+./bin/ai-backlog list --status ready # Filter by status
 ```
 
 ## What This Is (and What It Isn't)
@@ -122,29 +147,39 @@ You can also query the backlog from your terminal:
 | Agent roles/skills | Yes | No | No |
 | Epic → Story hierarchy | Yes | No | Labels only |
 | Definition of Done | Automated + manual | Per-task | No |
-| Kanban view | Generated MD + terminal | CLI + web UI | Projects board |
+| Kanban view | BOARD.md + HTML Pages + terminal | CLI + web UI | Projects board |
 | MCP integration | Not needed | Yes | Via Copilot |
 | Works offline | Yes | Yes | No |
 
 ## Getting Started
 
-### Option A: Clone into existing project
+### Option A: One-line init (recommended)
 
 ```bash
 # From your project root
-git clone https://github.com/YOUR_USER/agent-crew-spec.git .ai-setup
+bash <(curl -fsSL https://raw.githubusercontent.com/meierdar/agent-crew-spec/main/bin/ai-init)
+```
+
+The script creates the full `.ai/` structure, copies all scripts to `bin/`, writes `CLAUDE.md` and `.cursorrules`, and generates the initial `BOARD.md`. Interactive prompts guide you through the setup.
+
+### Option B: Clone into existing project
+
+```bash
+# From your project root
+git clone https://github.com/meierdar/agent-crew-spec.git .ai-setup
 cp -r .ai-setup/.ai .
 cp .ai-setup/CLAUDE.md .
 cp .ai-setup/.cursorrules .
-cp .ai-setup/ai-backlog .
-cp .ai-setup/ai-board-gen .
+cp -r .ai-setup/bin .
 cp -r .ai-setup/.github .
 rm -rf .ai-setup
+chmod +x bin/ai-backlog bin/ai-board-gen bin/ai-board-html bin/ai-init
+./bin/ai-board-gen > BOARD.md
 ```
 
-### Option B: Start from template
+### Option C: Start from template
 
-Use this repo as a GitHub template, then add your project code.
+Use this repo as a GitHub template (click **Use this template** on GitHub), then add your project code.
 
 ### After setup
 
@@ -152,7 +187,8 @@ Use this repo as a GitHub template, then add your project code.
 2. Create or modify roles in `.ai/roles/project/`
 3. Write your first epic in `.ai/epics/`
 4. Break it into stories in `.ai/stories/`
-5. Assign a story to your agent
+5. Assign a story: `./bin/ai-backlog assign .ai/stories/E001-S001-my-task.md <role>`
+6. Enable GitHub Pages: **Settings → Pages → Source → GitHub Actions**
 
 ## Design Decisions
 

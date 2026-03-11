@@ -53,16 +53,16 @@ grep -rl "priority: high" .ai/stories/
 grep -rl "assigned_role: flutter-developer" .ai/stories/
 ```
 
-Or use the provided helper script (if added to the project):
+Or use the helper scripts in `bin/`:
 
 ```bash
-./ai-backlog status          # Kanban-style overview
-./ai-backlog list --epic E001 --status ready
+./bin/ai-backlog status          # Kanban-style overview
+./bin/ai-backlog list --epic E001 --status ready
 ```
 
 ## Migrating an Existing Project
 
-1. Copy this `.ai/` folder into your project root.
+1. Run `bash <(curl -fsSL https://raw.githubusercontent.com/meierdar/agent-crew-spec/main/bin/ai-init)` from your project root, **or** copy the `.ai/` folder and `bin/` manually.
 2. Customize `CLAUDE.md` in the project root (add project-specific context).
 3. Add or override roles in `.ai/roles/project/`.
 4. Create your first epic and break it into stories.

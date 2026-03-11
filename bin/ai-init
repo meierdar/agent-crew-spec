@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# ai-init — Bootstrap agent-crew-spec into an existing project
+# Run from your project root: bash <(curl -fsSL https://raw.githubusercontent.com/.../bin/ai-init)
+# Or: ./bin/ai-init (if you've cloned the repo)
+
+set -euo pipefail
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+
+REPO_URL="https://raw.githubusercontent.com/meierdar/agent-crew-spec/main"
+
+log()  { echo -e "${GREEN}✓${NC} $*"; }
+info() { echo -e "${BLUE}→${NC} $*"; }
+warn() { echo -e "${YELLOW}!${NC} $*"; }
+
+echo ""
+echo -e "${BLUE}agent-crew-spec init${NC}"
+echo "────────────────────"
+echo ""
+
+# Confirm we're at a project root
+if [ ! -d ".git" ]; then
+    warn "No .git directory found. Are you in your project root?"
+    read -r -p "Continue anyway? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
+fi
+
+# Prompt for project name
+read -r -p "Project name (used in CLAUDE.md): " PROJECT_NAME
+PROJECT_NAME="${PROJECT_NAME:-My Project}"
+
+# Prompt for GitHub repo URL (optional, used for Pages board links)
+read -r -p "GitHub repo URL (e.g. https://github.com/user/repo) [leave blank to skip]: " GITHUB_URL
+GITHUB_URL="${GITHUB_URL:-}"
+
+# ─── Create .ai directory structure ───────────────────────────────────────────
+
+info "Creating .ai/ structure..."
+
+mkdir -p .ai/epics
+mkdir -p .ai/stories
+mkdir -p .ai/roles/defaults
+mkdir -p .ai/roles/project
+mkdir -p .ai/templates
+log ".ai/ directory structure created"
+
+# ─── Copy templates ────────────────────────────────────────────────────────────
+
+info "Fetching templates..."
+
+fetch() {
+    local path="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "${REPO_URL}/${path}" -o "$dest"
+    elif command -v wget &>/dev/null; then
+        wget -qO "$dest" "${REPO_URL}/${path}"
+    else
+        warn "Neither curl nor wget found — cannot fetch ${path}"
+        return 1
+    fi
+}
+
+fetch ".ai/templates/epic.md"    ".ai/templates/epic.md"   && log "Fetched epic template"
+fetch ".ai/templates/story.md"   ".ai/templates/story.md"  && log "Fetched story template"
+fetch ".ai/dod.md"               ".ai/dod.md"              && log "Fetched dod.md"
+fetch ".ai/README.md"            ".ai/README.md"           && log "Fetched .ai/README.md"
+
+# Default roles
+fetch ".ai/roles/defaults/flutter-developer.md"    ".ai/roles/defaults/flutter-developer.md"    && log "Fetched flutter-developer role"
+fetch ".ai/roles/defaults/fullstack-developer.md"  ".ai/roles/defaults/fullstack-developer.md"  && log "Fetched fullstack-developer role"
+fetch ".ai/roles/defaults/backend-developer.md"    ".ai/roles/defaults/backend-developer.md"    && log "Fetched backend-developer role"
+fetch ".ai/roles/defaults/devops-engineer.md"      ".ai/roles/defaults/devops-engineer.md"      && log "Fetched devops-engineer role"
+
+# Scripts
+mkdir -p bin
+fetch "bin/ai-backlog"    "bin/ai-backlog"    && chmod +x bin/ai-backlog    && log "Fetched bin/ai-backlog"
+fetch "bin/ai-board-gen"  "bin/ai-board-gen"  && chmod +x bin/ai-board-gen  && log "Fetched bin/ai-board-gen"
+fetch "bin/ai-board-html" "bin/ai-board-html" && chmod +x bin/ai-board-html && log "Fetched bin/ai-board-html"
+
+# GitHub Actions
+mkdir -p .github/workflows
+fetch ".github/workflows/update-board.yml" ".github/workflows/update-board.yml" && log "Fetched update-board workflow"
+fetch ".github/workflows/pages.yml"        ".github/workflows/pages.yml"        && log "Fetched pages workflow"
+
+# ─── Write CLAUDE.md ──────────────────────────────────────────────────────────
+
+info "Writing CLAUDE.md..."
+
+cat > CLAUDE.md << CLAUDEMD
+# Project: ${PROJECT_NAME}
+
+> This project uses [agent-crew-spec](https://github.com/meierdar/agent-crew-spec) for agent work management.
+
+## Agent Working Protocol
+
+Before starting any work, follow this sequence:
+
+1. **Read your role definition** in \`.ai/roles/\` (project-specific overrides take precedence over defaults)
+2. **Read the assigned story** you've been given (path will be provided in the prompt)
+3. **Read the parent epic** linked in the story's \`epic\` field for broader context
+4. **Check \`.ai/dod.md\`** to understand what "done" means
+5. **Work the story**, checking off tasks as you go
+6. **Self-verify** against the acceptance criteria and DoD before declaring done
+
+## Backlog Location
+
+All work items live in \`.ai/\`:
+- **Epics:** \`.ai/epics/\` — high-level feature goals
+- **Stories:** \`.ai/stories/\` — atomic units of work for a single agent session
+- **Roles:** \`.ai/roles/defaults/\` (base) + \`.ai/roles/project/\` (overrides)
+
+## Story Assignment
+
+Stories are assigned by the human operator via prompt. The agent does NOT self-assign or browse the backlog for work. A typical prompt looks like:
+
+\`\`\`
+Work on .ai/stories/E001-S003-auth-flow.md as flutter-developer.
+\`\`\`
+
+## Conventions
+
+- Never modify stories you haven't been assigned
+- Update the story's \`status\` frontmatter to \`in-progress\` when you start
+- Check off tasks (\`- [x]\`) as you complete them
+- When your work is ready for review, set \`status: review\` — do **not** set \`done\`
+- Do not mark status as \`done\` — the human operator does that after review
+- If a story is blocked or unclear, document the blocker in the story file under \`## Blockers\` and stop
+
+## Project-Specific Notes
+
+<!-- Add project-specific context, architecture decisions, tech stack, etc. here -->
+CLAUDEMD
+
+log "CLAUDE.md written"
+
+# ─── Write .cursorrules ────────────────────────────────────────────────────────
+
+if [ ! -f ".cursorrules" ]; then
+    cat > .cursorrules << 'CURSORRULES'
+# Agent Crew Spec
+
+This project uses agent-crew-spec for structured agent work management.
+
+Before starting any work:
+1. Read your role in `.ai/roles/`
+2. Read the assigned story (provided in prompt)
+3. Read the parent epic for context
+4. Check `.ai/dod.md` for the Definition of Done
+
+Stories are assigned via prompt — do NOT self-assign work.
+Set story status to `in-progress` when you start, `review` when done.
+CURSORRULES
+    log ".cursorrules written"
+fi
+
+# ─── Update GitHub Pages URL in workflow ──────────────────────────────────────
+
+if [ -n "$GITHUB_URL" ]; then
+    sed -i "s|REPO_URL: \"\"|REPO_URL: \"${GITHUB_URL}\"|g" .github/workflows/pages.yml 2>/dev/null || true
+    log "Set REPO_URL in pages.yml to ${GITHUB_URL}"
+fi
+
+# ─── Create initial BOARD.md ──────────────────────────────────────────────────
+
+chmod +x bin/ai-board-gen
+./bin/ai-board-gen > BOARD.md
+log "Initial BOARD.md generated"
+
+# ─── Done ─────────────────────────────────────────────────────────────────────
+
+echo ""
+echo -e "${GREEN}Done!${NC} Your project is set up with agent-crew-spec."
+echo ""
+echo "Next steps:"
+echo "  1. Edit CLAUDE.md — add your project-specific context"
+echo "  2. Add or override roles in .ai/roles/project/"
+echo "  3. Write your first epic:   .ai/epics/E001-my-feature.md"
+echo "  4. Break it into stories:   .ai/stories/E001-S001-my-task.md"
+echo "  5. Assign a story:          ./bin/ai-backlog assign .ai/stories/E001-S001-my-task.md <role>"
+echo ""
+echo "  Enable GitHub Pages: Settings → Pages → Source: GitHub Actions"
+echo ""

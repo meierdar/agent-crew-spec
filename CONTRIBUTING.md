@@ -16,7 +16,7 @@ Thanks for your interest in contributing. This project stays useful by reflectin
 - New **default roles** (e.g. `supabase-backend`, `devops-engineer`, `data-engineer`, `technical-writer`)
 - **Agent entry points** for tools beyond Claude Code and Cursor (Aider, Codex, Windsurf, Copilot…)
 - Improvements to **epic/story templates** based on real-world usage
-- Enhancements to **ai-board-gen** or **ai-backlog** scripts
+- Enhancements to **`bin/ai-board-gen`**, **`bin/ai-board-html`**, or **`bin/ai-backlog`** scripts
 - **Documentation** — clearer README, better examples, translations
 - **Real-world case studies** — how you used this on a project (add to `examples/`)
 
@@ -32,7 +32,7 @@ Thanks for your interest in contributing. This project stays useful by reflectin
 1. Fork the repository
 2. Create a branch: `git checkout -b feature/my-contribution`
 3. Make your changes
-4. Test: if you changed a script, run it. If you changed a template, use it.
+4. Test: if you changed a script in `bin/`, run it. If you changed a template, use it.
 5. Submit a PR with:
    - **What** you changed
    - **Why** (what problem it solves or what it improves)
