@@ -1,0 +1,50 @@
+name: Deploy Board to GitHub Pages
+
+on:
+  push:
+    paths:
+      - '.ai/stories/**'
+      - '.ai/epics/**'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy at a time; cancel in-flight if a newer one starts
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # Set to your GitHub repo URL for story/epic links in the board
+  # e.g. https://github.com/meierdar/agent-crew-spec
+  REPO_URL: ""
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate HTML board
+        run: |
+          chmod +x ./bin/ai-board-html
+          mkdir -p _site
+          ./bin/ai-board-html > _site/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

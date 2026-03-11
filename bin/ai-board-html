@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+# ai-board-html — Generate a self-contained HTML Kanban board for GitHub Pages
+# Outputs to stdout — redirect to _site/index.html or similar
+# Zero dependencies beyond bash, grep, sed
+
+set +e
+
+AI_DIR=".ai"
+STORIES_DIR="$AI_DIR/stories"
+EPICS_DIR="$AI_DIR/epics"
+REPO_URL="${REPO_URL:-}"  # Optional: set to your GitHub repo URL for story links
+
+get_fm() {
+    local file="$1" key="$2"
+    sed -n '/^---$/,/^---$/p' "$file" | grep "^${key}:" | sed "s/^${key}: *//;s/\"//g" | head -1
+}
+
+escape_html() {
+    echo "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+# Collect stories
+declare -a IDS TITLES EPICS ROLES PRIORITIES STATUSES FNAMES
+COUNT=0
+
+for f in "$STORIES_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    IDS[$COUNT]=$(get_fm "$f" "id")
+    TITLES[$COUNT]=$(get_fm "$f" "title")
+    EPICS[$COUNT]=$(get_fm "$f" "epic")
+    ROLES[$COUNT]=$(get_fm "$f" "assigned_role")
+    PRIORITIES[$COUNT]=$(get_fm "$f" "priority")
+    STATUSES[$COUNT]=$(get_fm "$f" "status")
+    FNAMES[$COUNT]=$(basename "$f")
+    COUNT=$((COUNT + 1))
+done
+
+# Collect epics
+declare -a EPIC_IDS EPIC_TITLES EPIC_STATUSES EPIC_FNAMES
+EPIC_COUNT=0
+
+for ef in "$EPICS_DIR"/*.md; do
+    [ -f "$ef" ] || continue
+    EPIC_IDS[$EPIC_COUNT]=$(get_fm "$ef" "id")
+    EPIC_TITLES[$EPIC_COUNT]=$(get_fm "$ef" "title")
+    EPIC_STATUSES[$EPIC_COUNT]=$(get_fm "$ef" "status")
+    EPIC_FNAMES[$EPIC_COUNT]=$(basename "$ef")
+    EPIC_COUNT=$((EPIC_COUNT + 1))
+done
+
+GENERATED_AT=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+# Build story cards HTML per column
+build_cards() {
+    local target_status="$1"
+    local output=""
+    for i in $(seq 0 $((COUNT - 1))); do
+        [ "${STATUSES[$i]}" = "$target_status" ] || continue
+        id=$(escape_html "${IDS[$i]}")
+        title=$(escape_html "${TITLES[$i]}")
+        role=$(escape_html "${ROLES[$i]}")
+        epic=$(escape_html "${EPICS[$i]}")
+        prio="${PRIORITIES[$i]}"
+        fname="${FNAMES[$i]}"
+
+        case "$prio" in
+            high)   prio_class="high";   prio_label="High" ;;
+            medium) prio_class="medium"; prio_label="Medium" ;;
+            low)    prio_class="low";    prio_label="Low" ;;
+            *)      prio_class="none";   prio_label="" ;;
+        esac
+
+        if [ -n "$REPO_URL" ]; then
+            link="${REPO_URL}/blob/main/.ai/stories/${fname}"
+            id_html="<a href=\"${link}\" target=\"_blank\" rel=\"noopener\">${id}</a>"
+        else
+            id_html="${id}"
+        fi
+
+        output="${output}<div class=\"card\">
+          <div class=\"card-header\">
+            <span class=\"card-id\">${id_html}</span>
+            $([ -n "$prio_label" ] && echo "<span class=\"badge prio-${prio_class}\">${prio_label}</span>")
+          </div>
+          <div class=\"card-title\">${title}</div>
+          <div class=\"card-meta\">${role} &middot; ${epic}</div>
+        </div>"
+    done
+    echo "$output"
+}
+
+count_status() {
+    local target="$1" n=0
+    for i in $(seq 0 $((COUNT - 1))); do
+        [ "${STATUSES[$i]}" = "$target" ] && n=$((n + 1))
+    done
+    echo "$n"
+}
+
+N_BACKLOG=$(count_status "backlog")
+N_READY=$(count_status "ready")
+N_IN_PROGRESS=$(count_status "in-progress")
+N_REVIEW=$(count_status "review")
+N_DONE=$(count_status "done")
+TOTAL=$((N_BACKLOG + N_READY + N_IN_PROGRESS + N_REVIEW + N_DONE))
+
+CARDS_BACKLOG=$(build_cards "backlog")
+CARDS_READY=$(build_cards "ready")
+CARDS_IN_PROGRESS=$(build_cards "in-progress")
+CARDS_REVIEW=$(build_cards "review")
+CARDS_DONE=$(build_cards "done")
+
+empty_col='<p class="empty">No stories</p>'
+
+[ -z "$CARDS_BACKLOG" ]     && CARDS_BACKLOG="$empty_col"
+[ -z "$CARDS_READY" ]       && CARDS_READY="$empty_col"
+[ -z "$CARDS_IN_PROGRESS" ] && CARDS_IN_PROGRESS="$empty_col"
+[ -z "$CARDS_REVIEW" ]      && CARDS_REVIEW="$empty_col"
+[ -z "$CARDS_DONE" ]        && CARDS_DONE="$empty_col"
+
+# Build epics section
+EPICS_HTML=""
+for i in $(seq 0 $((EPIC_COUNT - 1))); do
+    eid=$(escape_html "${EPIC_IDS[$i]}")
+    etitle=$(escape_html "${EPIC_TITLES[$i]}")
+    estatus="${EPIC_STATUSES[$i]}"
+    efname="${EPIC_FNAMES[$i]}"
+    case "$estatus" in
+        active) dot="🔵" ;;
+        done)   dot="✅" ;;
+        draft)  dot="📝" ;;
+        *)      dot="⚪" ;;
+    esac
+    if [ -n "$REPO_URL" ]; then
+        elink="${REPO_URL}/blob/main/.ai/epics/${efname}"
+        eid_html="<a href=\"${elink}\" target=\"_blank\" rel=\"noopener\">${eid}</a>"
+    else
+        eid_html="$eid"
+    fi
+    EPICS_HTML="${EPICS_HTML}<li>${dot} <strong>${eid_html}</strong> — ${etitle} <span class=\"badge status-${estatus}\">${estatus}</span></li>"
+done
+
+cat << HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Board</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #e6edf3;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    header .meta {
+      font-size: 0.78rem;
+      color: #8b949e;
+    }
+
+    .stats {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 16px 24px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .stat {
+      font-size: 0.82rem;
+      color: #8b949e;
+    }
+
+    .stat strong {
+      color: #e6edf3;
+      font-size: 1rem;
+    }
+
+    .epics-section {
+      padding: 16px 24px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .epics-section h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #8b949e;
+      margin-bottom: 10px;
+    }
+
+    .epics-section ul {
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .epics-section li {
+      font-size: 0.85rem;
+      color: #c9d1d9;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 4px 10px;
+    }
+
+    .epics-section li a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    .board {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      padding: 20px 24px;
+      overflow-x: auto;
+      min-width: 0;
+    }
+
+    @media (max-width: 900px) {
+      .board { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 500px) {
+      .board { grid-template-columns: 1fr; }
+    }
+
+    .column {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 200px;
+    }
+
+    .column-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .column-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #8b949e;
+    }
+
+    .column-count {
+      font-size: 0.75rem;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 1px 7px;
+      color: #8b949e;
+    }
+
+    .column-body {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+    }
+
+    .card {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 12px;
+      transition: border-color 0.15s;
+    }
+
+    .card:hover { border-color: #58a6ff; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 5px;
+    }
+
+    .card-id {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #8b949e;
+      font-family: monospace;
+    }
+
+    .card-id a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    .card-id a:hover { text-decoration: underline; }
+
+    .card-title {
+      font-size: 0.85rem;
+      color: #e6edf3;
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }
+
+    .card-meta {
+      font-size: 0.72rem;
+      color: #8b949e;
+    }
+
+    .empty {
+      font-size: 0.8rem;
+      color: #484f58;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .badge {
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .prio-high   { background: #3d1a1a; color: #f85149; border: 1px solid #6e2020; }
+    .prio-medium { background: #2e2a14; color: #e3b341; border: 1px solid #5a4a1a; }
+    .prio-low    { background: #162a1e; color: #3fb950; border: 1px solid #1e4a2a; }
+
+    .status-active { background: #112233; color: #58a6ff; border: 1px solid #1a3a5c; }
+    .status-done   { background: #162a1e; color: #3fb950; border: 1px solid #1e4a2a; }
+    .status-draft  { background: #1e1e1e; color: #8b949e; border: 1px solid #30363d; }
+
+    .col-in-progress .column-title { color: #58a6ff; }
+    .col-review      .column-title { color: #e3b341; }
+    .col-ready       .column-title { color: #3fb950; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📋 Project Board</h1>
+  <span class="meta">Generated ${GENERATED_AT} &nbsp;·&nbsp; ${TOTAL} stories total</span>
+</header>
+
+$(if [ "$EPIC_COUNT" -gt 0 ]; then
+echo '<div class="epics-section">'
+echo '  <h2>Epics</h2>'
+echo '  <ul>'
+echo "$EPICS_HTML"
+echo '  </ul>'
+echo '</div>'
+fi)
+
+<div class="stats">
+  <div class="stat"><strong>${N_IN_PROGRESS}</strong> in progress</div>
+  <div class="stat"><strong>${N_REVIEW}</strong> in review</div>
+  <div class="stat"><strong>${N_READY}</strong> ready</div>
+  <div class="stat"><strong>${N_BACKLOG}</strong> backlog</div>
+  <div class="stat"><strong>${N_DONE}</strong> done</div>
+</div>
+
+<div class="board">
+
+  <div class="column col-in-progress">
+    <div class="column-header">
+      <span class="column-title">🔧 In Progress</span>
+      <span class="column-count">${N_IN_PROGRESS}</span>
+    </div>
+    <div class="column-body">
+      ${CARDS_IN_PROGRESS}
+    </div>
+  </div>
+
+  <div class="column col-review">
+    <div class="column-header">
+      <span class="column-title">👀 Review</span>
+      <span class="column-count">${N_REVIEW}</span>
+    </div>
+    <div class="column-body">
+      ${CARDS_REVIEW}
+    </div>
+  </div>
+
+  <div class="column col-ready">
+    <div class="column-header">
+      <span class="column-title">✅ Ready</span>
+      <span class="column-count">${N_READY}</span>
+    </div>
+    <div class="column-body">
+      ${CARDS_READY}
+    </div>
+  </div>
+
+  <div class="column">
+    <div class="column-header">
+      <span class="column-title">📥 Backlog</span>
+      <span class="column-count">${N_BACKLOG}</span>
+    </div>
+    <div class="column-body">
+      ${CARDS_BACKLOG}
+    </div>
+  </div>
+
+  <div class="column">
+    <div class="column-header">
+      <span class="column-title">🏁 Done</span>
+      <span class="column-count">${N_DONE}</span>
+    </div>
+    <div class="column-body">
+      ${CARDS_DONE}
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
+HTML

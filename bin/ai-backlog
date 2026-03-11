@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ai-backlog — Simple CLI for querying the .ai backlog
+# Usage: ./bin/ai-backlog [command] [options]
+
+set -euo pipefail
+
+AI_DIR=".ai"
+STORIES_DIR="$AI_DIR/stories"
+EPICS_DIR="$AI_DIR/epics"
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+
+get_frontmatter_value() {
+    local file="$1" key="$2"
+    sed -n '/^---$/,/^---$/p' "$file" | grep "^${key}:" | sed "s/^${key}: *//;s/\"//g" | head -1
+}
+
+cmd_status() {
+    echo -e "\n${BLUE}═══ BACKLOG STATUS ═══${NC}\n"
+
+    for status in backlog ready in-progress review done; do
+        case $status in
+            backlog)     color=$GRAY ;;
+            ready)       color=$YELLOW ;;
+            in-progress) color=$BLUE ;;
+            review)      color=$RED ;;
+            done)        color=$GREEN ;;
+        esac
+
+        echo -e "${color}▸ ${status^^}${NC}"
+
+        found=false
+        for f in "$STORIES_DIR"/*.md; do
+            [ -f "$f" ] || continue
+            file_status=$(get_frontmatter_value "$f" "status")
+            if [ "$file_status" = "$status" ]; then
+                id=$(get_frontmatter_value "$f" "id")
+                title=$(get_frontmatter_value "$f" "title")
+                role=$(get_frontmatter_value "$f" "assigned_role")
+                priority=$(get_frontmatter_value "$f" "priority")
+                echo -e "  ${id}  ${title}  ${GRAY}[${role}] (${priority})${NC}"
+                found=true
+            fi
+        done
+
+        if [ "$found" = false ]; then
+            echo -e "  ${GRAY}(none)${NC}"
+        fi
+        echo ""
+    done
+}
+
+cmd_list() {
+    local filter_epic="" filter_status="" filter_role=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --epic)   filter_epic="$2"; shift 2 ;;
+            --status) filter_status="$2"; shift 2 ;;
+            --role)   filter_role="$2"; shift 2 ;;
+            *)        shift ;;
+        esac
+    done
+
+    for f in "$STORIES_DIR"/*.md; do
+        [ -f "$f" ] || continue
+        if [ -n "$filter_epic" ]; then
+            epic=$(get_frontmatter_value "$f" "epic")
+            [ "$epic" != "$filter_epic" ] && continue
+        fi
+        if [ -n "$filter_status" ]; then
+            status=$(get_frontmatter_value "$f" "status")
+            [ "$status" != "$filter_status" ] && continue
+        fi
+        if [ -n "$filter_role" ]; then
+            role=$(get_frontmatter_value "$f" "assigned_role")
+            [ "$role" != "$filter_role" ] && continue
+        fi
+
+        id=$(get_frontmatter_value "$f" "id")
+        title=$(get_frontmatter_value "$f" "title")
+        status=$(get_frontmatter_value "$f" "status")
+        echo "$id  [$status]  $title  ($f)"
+    done
+}
+
+cmd_assign() {
+    local story_path="$1" role="$2"
+    echo ""
+    echo "Prompt for agent:"
+    echo "──────────────────"
+    echo "Work on ${story_path} as ${role}."
+    echo "──────────────────"
+    echo ""
+    echo "Copy the above into your agent prompt."
+}
+
+cmd_help() {
+    echo "Usage: ./bin/ai-backlog <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  status                         Kanban-style overview of all stories"
+    echo "  list [--epic E001] [--status ready] [--role flutter-developer]"
+    echo "                                 Filter stories"
+    echo "  assign <story-path> <role>     Generate agent prompt"
+    echo "  help                           Show this help"
+}
+
+case "${1:-help}" in
+    status)  cmd_status ;;
+    list)    shift; cmd_list "$@" ;;
+    assign)  shift; cmd_assign "$@" ;;
+    help|*)  cmd_help ;;
+esac
