@@ -5,6 +5,7 @@ on:
     paths:
       - '.ai/stories/**'
       - '.ai/epics/**'
+      - 'BOARD.md'
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 permissions:
@@ -21,6 +22,7 @@ env:
   # Set to your GitHub repo URL for story/epic links in the board
   # e.g. https://github.com/meierdar/agent-crew-spec
   REPO_URL: ""
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   deploy:
