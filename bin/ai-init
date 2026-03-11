@@ -137,6 +137,17 @@ CLAUDEMD
 
 log "CLAUDE.md written"
 
+# ─── Copy Claude Code skills ──────────────────────────────────────────────────
+
+info "Fetching Claude Code skills..."
+
+SKILLS=(new-story new-epic assign board story-done standup commit pr fix-issue review)
+for skill in "${SKILLS[@]}"; do
+    mkdir -p ".claude/skills/${skill}"
+    fetch ".claude/skills/${skill}/SKILL.md" ".claude/skills/${skill}/SKILL.md" && log "Fetched skill: /${skill}"
+done
+fetch ".claude/skills/README.md" ".claude/skills/README.md" && log "Fetched skills README"
+
 # ─── Write .cursorrules ────────────────────────────────────────────────────────
 
 if [ ! -f ".cursorrules" ]; then
