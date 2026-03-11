@@ -190,25 +190,6 @@ Use this repo as a GitHub template (click **Use this template** on GitHub), then
 5. Assign a story: `./bin/ai-backlog assign .ai/stories/E001-S001-my-task.md <role>`
 6. Enable GitHub Pages: **Settings → Pages → Source → GitHub Actions**
 
-## Claude Code Skills
-
-The repo ships with custom slash commands in `.claude/skills/`. Open Claude Code in any project that uses agent-crew-spec and use them directly:
-
-| Command | What it does |
-|---------|-------------|
-| `/new-story E001 Add login button` | Scaffold a story from template |
-| `/new-epic User Authentication` | Scaffold an epic from template |
-| `/assign .ai/stories/E001-S002.md flutter-developer` | Generate an agent prompt |
-| `/board` | Show Kanban status |
-| `/story-done` | Verify DoD, set status → review |
-| `/standup` | Summarize today's work from git + board |
-| `/commit` | Conventional Commit for current changes |
-| `/pr` | Create a GitHub Pull Request |
-| `/fix-issue 42` | Fetch issue #42 and implement the fix |
-| `/review` | Code review of current changes |
-
-See [`.claude/skills/README.md`](.claude/skills/README.md) for the full list.
-
 ## Design Decisions
 
 - **Frontmatter over folders for state.** Moving files between folders creates noisy git history and breaks links. Status in YAML is grep-able, script-friendly, and diffable.
