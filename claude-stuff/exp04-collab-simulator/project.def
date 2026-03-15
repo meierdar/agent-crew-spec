@@ -1,0 +1,17 @@
+# Project definition: a realistic 8-task feature build
+# Format: task_id | depends_on (comma-sep or "none") | complexity (tokens) | description
+#
+# This models building a user authentication feature end-to-end:
+# DB schema -> API -> UI components -> integration -> tests
+#
+# Complexity is in "token units" — a rough proxy for how much context
+# an agent needs to consume + produce to complete the task.
+
+T01|none|500|Design database schema for users table
+T02|none|300|Define API contract (OpenAPI spec)
+T03|T01|800|Implement database migrations
+T04|T02|600|Implement auth API endpoints
+T05|T03,T04|400|Wire API to database layer
+T06|none|500|Build login UI component
+T07|none|500|Build registration UI component
+T08|T05,T06,T07|700|Integration: connect UI to API with error handling

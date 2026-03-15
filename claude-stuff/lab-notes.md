@@ -158,8 +158,77 @@ should be stored in a repo vs. outside it.
 
 ---
 
+### Exp 04 — AI Collaboration Model Simulator (2026-03-15)
+
+**Folder:** `exp04-collab-simulator/`
+
+**The question:** The current spec borrows from human agile. But AI agents
+have fundamentally different properties (no memory between sessions,
+unlimited clonability, zero ego, fixed context windows). Is human-style
+collaboration actually optimal for them?
+
+**What I built:**
+- A discrete-event simulator in ~200 lines of POSIX sh
+- Three competing models: "Current Spec" (serial, human review),
+  "Swarm" (parallel, shared scratchpad, no review), "Ensemble"
+  (paired redundant execution, auto-merge)
+- An 8-task dependency graph modeling a realistic auth feature build
+- Side-by-side comparison script
+
+**The results:**
+
+```
+Metric                     Current       Swarm    Ensemble
+------------------------------------------------------------
+Wall-clock (ticks)              41          22          32
+Total tokens                  7980        6625       10060
+Context waste                 1080         275         360
+Task failures                    0           2           0
+Human interventions              8           0           0
+```
+
+**Key insights:**
+1. **The human bottleneck is the biggest cost.** 8 interventions for 8
+   tasks. Humans aren't always available, so serial assignment adds
+   unpredictable latency.
+2. **Shared context beats handoffs.** Swarm's shared scratchpad reduces
+   context waste by 75%. A living document > a post-mortem handoff.
+3. **Parallelism is the biggest speed lever.** 46% faster with 4 agents.
+   The dependency graph HAS natural parallelism — the current spec just
+   doesn't exploit it.
+4. **Redundancy is expensive but reliable.** Ensemble has zero failures
+   at 26% more tokens. Worth it for critical paths, not for everything.
+5. **The right model is a hybrid** — human priorities + agent autonomy
+   on the execution graph + selective redundancy for critical tasks.
+
+**What I'd change in the spec:**
+- Add `depends_on` to stories (enables graph execution)
+- Add shared context files (`.ai/context/<epic>.md`) instead of handoffs
+- Auto-suggest next-ready stories after completion
+- Allow parallel assignment of independent stories
+- `critical: true` flag for redundant execution
+
+**Would I ship the simulator?** The simulator itself is a thinking tool,
+not a product. But the findings point to concrete, shippable changes
+to the spec. See `FINDINGS.md` for the full analysis.
+
+---
+
+### Failure catalog
+
+| Idea | Why it didn't work |
+|------|-------------------|
+| Git notes for handoffs | Notes attach to commits, but handoffs are about stories (which span commits). Wrong unit of attachment. |
+| Encoding state machine in filenames | Thought about `story.draft.md` -> `story.ready.md` renames. Breaks every reference to the file. Terrible idea. |
+| Pure event-driven shell (no ticks) | Tried modeling the simulator without discrete ticks. POSIX sh has no priority queue, so you end up re-scanning the whole task list every iteration anyway. Ticks are cleaner. |
+
+---
+
 ### Running "I'd actually ship this" list
 
 1. `depends_on` frontmatter field + `## Handoff` section convention
 2. State machine engine for `ai-backlog` transition validation
-3. *(watching for more)*
+3. Shared context files (`.ai/context/<epic>.md`) — replaces handoffs
+4. Auto-suggest next-ready stories in `ai-backlog`
+5. `critical: true` story flag for selective redundant execution
+6. *(watching for more)*
