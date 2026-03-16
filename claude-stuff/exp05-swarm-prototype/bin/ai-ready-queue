@@ -1,0 +1,152 @@
+#!/bin/sh
+# ai-ready-queue — find stories whose dependencies are all satisfied
+#
+# Usage: ai-ready-queue [--epic EXXX] [--format human|prompt]
+#
+# Reads all stories, builds dependency graph, outputs stories that:
+#   1. Have status "ready" or "backlog" (not yet started)
+#   2. Have all depends_on stories in status "done" or "review"
+#   3. Are not currently claimed by another agent
+#
+# This is the core primitive that enables swarm execution.
+
+set -e
+
+STORIES_DIR=".ai/stories"
+EPIC_FILTER=""
+FORMAT="human"
+
+# Parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --epic)   EPIC_FILTER="$2"; shift 2 ;;
+        --format) FORMAT="$2"; shift 2 ;;
+        --help)
+            echo "Usage: ai-ready-queue [--epic EXXX] [--format human|prompt|json]"
+            echo ""
+            echo "Finds stories ready to start based on dependency graph."
+            echo ""
+            echo "Options:"
+            echo "  --epic EXXX    Filter to stories in a specific epic"
+            echo "  --format FMT   Output format: human (default), prompt, json"
+            exit 0
+            ;;
+        *) echo "Unknown arg: $1"; exit 1 ;;
+    esac
+done
+
+# --- Frontmatter parsing ---
+
+get_field() {
+    _file="$1"
+    _key="$2"
+    sed -n '/^---$/,/^---$/p' "$_file" \
+        | grep "^${_key}:" \
+        | head -1 \
+        | sed "s/^${_key}: *//" \
+        | tr -d '"' | tr -d "'"
+}
+
+get_list_field() {
+    _file="$1"
+    _key="$2"
+    # Extract list items under a key (YAML list format)
+    sed -n '/^---$/,/^---$/p' "$_file" \
+        | sed -n "/^${_key}:/,/^[a-z]/p" \
+        | grep '^ *-' \
+        | sed 's/^ *- *//' \
+        | sed 's/ *#.*//' \
+        | tr -d '"' | tr -d "'"
+}
+
+# --- Build story index ---
+
+READY_STORIES=""
+READY_COUNT=0
+
+for story_file in "$STORIES_DIR"/*.md; do
+    [ -f "$story_file" ] || continue
+
+    story_id="$(get_field "$story_file" "id")"
+    story_status="$(get_field "$story_file" "status")"
+    story_epic="$(get_field "$story_file" "epic")"
+    story_title="$(get_field "$story_file" "title")"
+    story_role="$(get_field "$story_file" "assigned_role")"
+    story_priority="$(get_field "$story_file" "priority")"
+    story_critical="$(get_field "$story_file" "critical")"
+    story_estimate="$(get_field "$story_file" "estimate")"
+
+    # Filter by epic if specified
+    if [ -n "$EPIC_FILTER" ] && [ "$story_epic" != "$EPIC_FILTER" ]; then
+        continue
+    fi
+
+    # Only consider stories not yet started
+    case "$story_status" in
+        ready|backlog) ;;
+        *) continue ;;
+    esac
+
+    # Check if claimed
+    if [ -f ".ai/claims/${story_id}.lock" ]; then
+        continue
+    fi
+
+    # Check dependencies
+    deps="$(get_list_field "$story_file" "depends_on")"
+    all_met=true
+
+    if [ -n "$deps" ]; then
+        for dep_id in $deps; do
+            # Find the dependency story file
+            dep_file=""
+            for f in "$STORIES_DIR"/*.md; do
+                if [ "$(get_field "$f" "id")" = "$dep_id" ]; then
+                    dep_file="$f"
+                    break
+                fi
+            done
+
+            if [ -z "$dep_file" ]; then
+                all_met=false
+                break
+            fi
+
+            dep_status="$(get_field "$dep_file" "status")"
+            case "$dep_status" in
+                done|review) ;;  # Satisfied
+                *) all_met=false; break ;;
+            esac
+        done
+    fi
+
+    if [ "$all_met" = true ]; then
+        READY_COUNT=$((READY_COUNT + 1))
+
+        case "$FORMAT" in
+            human)
+                _crit=""
+                [ "$story_critical" = "true" ] && _crit=" [CRITICAL]"
+                printf "  %s  %-12s  %-6s  %-4s  %s%s\n" \
+                    "$story_id" "$story_role" "$story_priority" "$story_estimate" "$story_title" "$_crit"
+                ;;
+            prompt)
+                echo "Work on $story_file as ${story_role}."
+                ;;
+            json)
+                printf '{"id":"%s","file":"%s","role":"%s","title":"%s","priority":"%s","critical":%s}\n' \
+                    "$story_id" "$story_file" "$story_role" "$story_title" "$story_priority" \
+                    "${story_critical:-false}"
+                ;;
+        esac
+    fi
+done
+
+if [ "$FORMAT" = "human" ]; then
+    echo ""
+    if [ "$READY_COUNT" -eq 0 ]; then
+        echo "No stories ready. Either all are in progress/done, or dependencies are unmet."
+    else
+        echo "$READY_COUNT story(s) ready to start."
+    fi
+fi

@@ -1,0 +1,104 @@
+#!/bin/sh
+# ai-claim — atomically claim a story so no other agent picks it up
+#
+# Usage:
+#   ai-claim lock  <story-id> <agent-name>   — claim a story
+#   ai-claim unlock <story-id>                — release a claim
+#   ai-claim status <story-id>                — check claim status
+#   ai-claim list                             — list all active claims
+#
+# Claims are stored as lock files in .ai/claims/.
+# They're git-tracked, so they survive across sessions and clones.
+# Two agents trying to claim the same story: first one wins (file exists = taken).
+
+set -e
+
+CLAIMS_DIR=".ai/claims"
+ACTION="${1:?Usage: $0 lock|unlock|status|list <story-id> [agent-name]}"
+
+# Ensure claims directory exists
+mkdir -p "$CLAIMS_DIR"
+
+case "$ACTION" in
+    lock)
+        STORY_ID="${2:?Usage: $0 lock <story-id> <agent-name>}"
+        AGENT_NAME="${3:?Usage: $0 lock <story-id> <agent-name>}"
+        LOCK_FILE="${CLAIMS_DIR}/${STORY_ID}.lock"
+
+        if [ -f "$LOCK_FILE" ]; then
+            EXISTING="$(cat "$LOCK_FILE")"
+            echo "ALREADY CLAIMED: $STORY_ID is held by $(echo "$EXISTING" | head -1)"
+            exit 1
+        fi
+
+        # Write claim atomically (as atomic as filesystem allows)
+        cat > "$LOCK_FILE" <<CLAIM
+agent: $AGENT_NAME
+claimed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+pid: $$
+CLAIM
+
+        echo "CLAIMED: $STORY_ID by $AGENT_NAME"
+
+        # Update story status to in-progress
+        STORY_FILE=""
+        for f in .ai/stories/*.md; do
+            _sid="$(sed -n '/^---$/,/^---$/p' "$f" | grep '^id:' | head -1 | sed 's/^id: *//' | tr -d '"' | tr -d "'")"
+            if [ "$_sid" = "$STORY_ID" ]; then
+                STORY_FILE="$f"
+                break
+            fi
+        done
+
+        if [ -n "$STORY_FILE" ]; then
+            sed -i "s/^status: .*/status: in-progress/" "$STORY_FILE"
+            echo "  Updated $STORY_FILE status to in-progress"
+        fi
+        ;;
+
+    unlock)
+        STORY_ID="${2:?Usage: $0 unlock <story-id>}"
+        LOCK_FILE="${CLAIMS_DIR}/${STORY_ID}.lock"
+
+        if [ ! -f "$LOCK_FILE" ]; then
+            echo "NOT CLAIMED: $STORY_ID has no active claim"
+            exit 0
+        fi
+
+        rm "$LOCK_FILE"
+        echo "RELEASED: $STORY_ID"
+        ;;
+
+    status)
+        STORY_ID="${2:?Usage: $0 status <story-id>}"
+        LOCK_FILE="${CLAIMS_DIR}/${STORY_ID}.lock"
+
+        if [ -f "$LOCK_FILE" ]; then
+            echo "CLAIMED:"
+            sed 's/^/  /' "$LOCK_FILE"
+        else
+            echo "AVAILABLE: $STORY_ID is not claimed"
+        fi
+        ;;
+
+    list)
+        if [ -z "$(ls "$CLAIMS_DIR"/*.lock 2>/dev/null)" ]; then
+            echo "No active claims."
+            exit 0
+        fi
+
+        echo "Active claims:"
+        for lock_file in "$CLAIMS_DIR"/*.lock; do
+            _story_id="$(basename "$lock_file" .lock)"
+            _agent="$(grep '^agent:' "$lock_file" | sed 's/^agent: *//')"
+            _time="$(grep '^claimed_at:' "$lock_file" | sed 's/^claimed_at: *//')"
+            printf "  %-12s  %-20s  %s\n" "$_story_id" "$_agent" "$_time"
+        done
+        ;;
+
+    *)
+        echo "Unknown action: $ACTION"
+        echo "Usage: $0 lock|unlock|status|list <story-id> [agent-name]"
+        exit 1
+        ;;
+esac

@@ -224,11 +224,51 @@ to the spec. See `FINDINGS.md` for the full analysis.
 
 ---
 
+### Exp 05 — Real-World Swarm Prototype (2026-03-16)
+
+**Folder:** `exp05-swarm-prototype/`
+
+**The question:** How would you actually transform the current setup
+into a working swarm? Not theory — working tools with a demo.
+
+**What I built:**
+- `ai-ready-queue` — reads all stories, resolves dependency graph,
+  outputs which stories can start right now
+- `ai-claim` — atomic story claiming via lock files (prevents two
+  agents picking the same story)
+- `ai-context` — shared context files that agents append to as they
+  work (replaces handoffs)
+- `ai-swarm` — orchestrator with `plan` (show wave execution), `run`
+  (show ready queue with prompts), `status` (current state)
+- Full end-to-end demo with 5 stories, dependency graph, and simulated
+  agent workflow
+
+**The demo showed:**
+- 5 stories that currently require 5 serial sessions → 3 wave sessions
+- 3 stories run in parallel (Wave 0), then 1 critical (Wave 1), then
+  1 integration (Wave 2)
+- Shared context eliminates re-discovery entirely
+- Only 2 of 5 stories need human review (the critical ones)
+
+**Biggest insight:**
+The transformation isn't "replace everything." It's three additions:
+1. `depends_on` in frontmatter (enables the graph)
+2. shared context files (eliminates re-discovery)
+3. `critical` flag (focuses human review where it matters)
+
+Everything else — the claim system, the orchestrator, the wave
+planning — is nice tooling around those three primitives.
+
+**See also:** `HONEST-ASSESSMENT.md` for what's real vs. speculative.
+
+---
+
 ### Running "I'd actually ship this" list
 
-1. `depends_on` frontmatter field + `## Handoff` section convention
-2. State machine engine for `ai-backlog` transition validation
-3. Shared context files (`.ai/context/<epic>.md`) — replaces handoffs
-4. Auto-suggest next-ready stories in `ai-backlog`
-5. `critical: true` story flag for selective redundant execution
-6. *(watching for more)*
+1. `depends_on` frontmatter field (enables dependency graph)
+2. Shared context files (`.ai/context/<epic>.md`) — replaces handoffs
+3. `critical: true` story flag for selective review/redundancy
+4. `ai-swarm plan` — visualize execution waves
+5. State machine engine for `ai-backlog` transition validation
+6. `ai-ready-queue` — auto-discover next stories to assign
+7. `ai-claim` — prevent double-assignment in parallel execution

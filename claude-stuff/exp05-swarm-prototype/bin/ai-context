@@ -1,0 +1,90 @@
+#!/bin/sh
+# ai-context — manage shared context files for epic-level knowledge
+#
+# Usage:
+#   ai-context read  <epic-id>                      — read current context
+#   ai-context write <epic-id> <agent> <message>     — append an entry
+#   ai-context init  <epic-id>                       — create context file
+#
+# Shared context replaces handoffs. Instead of Agent A writing a handoff
+# after finishing and Agent B reading it before starting, ALL agents
+# write to a living document AS THEY WORK.
+#
+# This means: no information loss, no re-discovery, every agent sees
+# what every other agent already figured out.
+
+set -e
+
+CONTEXT_DIR=".ai/context"
+ACTION="${1:?Usage: $0 read|write|init <epic-id> [agent] [message]}"
+
+mkdir -p "$CONTEXT_DIR"
+
+case "$ACTION" in
+    init)
+        EPIC_ID="${2:?Usage: $0 init <epic-id>}"
+        CONTEXT_FILE="${CONTEXT_DIR}/${EPIC_ID}.md"
+
+        if [ -f "$CONTEXT_FILE" ]; then
+            echo "Context file already exists: $CONTEXT_FILE"
+            exit 0
+        fi
+
+        cat > "$CONTEXT_FILE" <<CONTEXT
+# Shared Context: $EPIC_ID
+
+> This file is a living document. Agents append to it as they work.
+> Read this BEFORE starting any story in this epic.
+> Write to it AFTER making any decision or completing any task.
+
+---
+
+CONTEXT
+        echo "Created: $CONTEXT_FILE"
+        ;;
+
+    read)
+        EPIC_ID="${2:?Usage: $0 read <epic-id>}"
+        CONTEXT_FILE="${CONTEXT_DIR}/${EPIC_ID}.md"
+
+        if [ ! -f "$CONTEXT_FILE" ]; then
+            echo "No context file for $EPIC_ID"
+            echo "Create one with: $0 init $EPIC_ID"
+            exit 1
+        fi
+
+        cat "$CONTEXT_FILE"
+        ;;
+
+    write)
+        EPIC_ID="${2:?Usage: $0 write <epic-id> <agent> <message>}"
+        AGENT="${3:?Usage: $0 write <epic-id> <agent> <message>}"
+        shift 3
+        MESSAGE="$*"
+
+        CONTEXT_FILE="${CONTEXT_DIR}/${EPIC_ID}.md"
+
+        if [ ! -f "$CONTEXT_FILE" ]; then
+            # Auto-init
+            mkdir -p "$CONTEXT_DIR"
+            printf "# Shared Context: %s\n\n---\n\n" "$EPIC_ID" > "$CONTEXT_FILE"
+        fi
+
+        # Append timestamped entry
+        cat >> "$CONTEXT_FILE" <<ENTRY
+### $(date -u +%Y-%m-%dT%H:%M:%SZ) — $AGENT
+
+$MESSAGE
+
+---
+
+ENTRY
+        echo "Appended to $CONTEXT_FILE"
+        ;;
+
+    *)
+        echo "Unknown action: $ACTION"
+        echo "Usage: $0 read|write|init <epic-id> [agent] [message]"
+        exit 1
+        ;;
+esac

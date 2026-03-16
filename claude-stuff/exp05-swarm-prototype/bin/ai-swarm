@@ -1,0 +1,255 @@
+#!/bin/sh
+# ai-swarm — orchestrate multiple agents working a dependency graph
+#
+# Usage:
+#   ai-swarm plan   [--epic EXXX]   — show execution plan (dry run)
+#   ai-swarm run    [--epic EXXX]   — execute the swarm (prints prompts)
+#   ai-swarm status                 — show current swarm state
+#
+# This is the orchestrator. In practice, it doesn't RUN agents itself
+# (that's the human's job or a wrapper script's job). What it does:
+#
+# 1. Builds the dependency graph
+# 2. Identifies parallelism (which stories can run simultaneously)
+# 3. Outputs agent prompts in the right order
+# 4. Tracks progress via claims and story status
+#
+# Think of it as a "smart task scheduler" — it answers:
+# "What should my agents work on RIGHT NOW?"
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STORIES_DIR=".ai/stories"
+ACTION="${1:?Usage: $0 plan|run|status [--epic EXXX]}"
+shift
+
+EPIC_FILTER=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --epic) EPIC_FILTER="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# --- Frontmatter helpers (duplicated for standalone use) ---
+
+get_field() {
+    sed -n '/^---$/,/^---$/p' "$1" \
+        | grep "^${2}:" | head -1 \
+        | sed "s/^${2}: *//" | tr -d '"' | tr -d "'"
+}
+
+get_list_field() {
+    sed -n '/^---$/,/^---$/p' "$1" \
+        | sed -n "/^${2}:/,/^[a-z]/p" \
+        | grep '^ *-' \
+        | sed 's/^ *- *//' | sed 's/ *#.*//' | tr -d '"' | tr -d "'"
+}
+
+# --- Build dependency graph ---
+
+# Collect all stories
+ALL_STORIES=""
+for f in "$STORIES_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    _id="$(get_field "$f" "id")"
+    _epic="$(get_field "$f" "epic")"
+
+    if [ -n "$EPIC_FILTER" ] && [ "$_epic" != "$EPIC_FILTER" ]; then
+        continue
+    fi
+
+    ALL_STORIES="${ALL_STORIES}${_id}|${f}
+"
+done
+
+# For each story, resolve dependencies and compute "depth" (longest path)
+compute_depth() {
+    _sid="$1"
+    _visited="$2"
+
+    # Cycle detection
+    case " $_visited " in
+        *" $_sid "*) echo 0; return ;;
+    esac
+
+    _sfile=""
+    echo "$ALL_STORIES" | while IFS='|' read -r _s _sf; do
+        [ "$_s" = "$_sid" ] && echo "$_sf"
+    done | head -1 | {
+        read -r _sfile
+        if [ -z "$_sfile" ]; then
+            echo 0
+            return
+        fi
+
+        _deps="$(get_list_field "$_sfile" "depends_on")"
+        if [ -z "$_deps" ]; then
+            echo 0
+            return
+        fi
+
+        _max=0
+        for _dep in $_deps; do
+            _d="$(compute_depth "$_dep" "$_visited $_sid")"
+            if [ "$_d" -gt "$_max" ]; then
+                _max="$_d"
+            fi
+        done
+        echo $((_max + 1))
+    }
+}
+
+case "$ACTION" in
+    plan)
+        echo "============================================"
+        echo "  Swarm Execution Plan"
+        [ -n "$EPIC_FILTER" ] && echo "  Epic: $EPIC_FILTER"
+        echo "============================================"
+        echo ""
+
+        # Group stories by depth (wave)
+        MAX_DEPTH=0
+        STORY_DEPTHS=""
+
+        echo "$ALL_STORIES" | while IFS='|' read -r sid sfile; do
+            [ -z "$sid" ] && continue
+            depth="$(compute_depth "$sid" "")"
+            status="$(get_field "$sfile" "status")"
+            role="$(get_field "$sfile" "assigned_role")"
+            title="$(get_field "$sfile" "title")"
+            critical="$(get_field "$sfile" "critical")"
+            deps="$(get_list_field "$sfile" "depends_on" | tr '\n' ',' | sed 's/,$//')"
+            [ -z "$deps" ] && deps="none"
+
+            _crit=""
+            [ "$critical" = "true" ] && _crit=" **CRITICAL**"
+
+            _status_icon="."
+            case "$status" in
+                done)        _status_icon="x" ;;
+                review)      _status_icon="~" ;;
+                in-progress) _status_icon=">" ;;
+                ready)       _status_icon=" " ;;
+                backlog)     _status_icon="-" ;;
+            esac
+
+            printf "%d|[%s] %s (%s) — %s | deps: %s | role: %s%s\n" \
+                "$depth" "$_status_icon" "$sid" "$status" "$title" "$deps" "$role" "$_crit"
+        done | sort -t'|' -k1 -n | {
+            CURRENT_WAVE=-1
+            while IFS='|' read -r wave info; do
+                if [ "$wave" -ne "$CURRENT_WAVE" ]; then
+                    echo ""
+                    echo "--- Wave $wave (can run in parallel) ---"
+                    CURRENT_WAVE="$wave"
+                fi
+                echo "  $info"
+            done
+        }
+
+        echo ""
+        echo "============================================"
+        echo "Stories in the same wave have no dependencies"
+        echo "on each other and can run simultaneously."
+        echo "============================================"
+        ;;
+
+    run)
+        echo "============================================"
+        echo "  Swarm — Ready Queue"
+        [ -n "$EPIC_FILTER" ] && echo "  Epic: $EPIC_FILTER"
+        echo "============================================"
+        echo ""
+        echo "The following stories can start NOW:"
+        echo ""
+
+        FOUND=0
+        echo "$ALL_STORIES" | while IFS='|' read -r sid sfile; do
+            [ -z "$sid" ] && continue
+
+            status="$(get_field "$sfile" "status")"
+            case "$status" in
+                ready|backlog) ;;
+                *) continue ;;
+            esac
+
+            # Check claims
+            if [ -f ".ai/claims/${sid}.lock" ]; then
+                continue
+            fi
+
+            # Check deps
+            deps="$(get_list_field "$sfile" "depends_on")"
+            all_met=true
+            if [ -n "$deps" ]; then
+                for dep in $deps; do
+                    dep_file=""
+                    for df in "$STORIES_DIR"/*.md; do
+                        [ "$(get_field "$df" "id")" = "$dep" ] && dep_file="$df" && break
+                    done
+                    if [ -z "$dep_file" ]; then
+                        all_met=false; break
+                    fi
+                    dep_status="$(get_field "$dep_file" "status")"
+                    case "$dep_status" in
+                        done|review) ;;
+                        *) all_met=false; break ;;
+                    esac
+                done
+            fi
+
+            if [ "$all_met" = true ]; then
+                role="$(get_field "$sfile" "assigned_role")"
+                title="$(get_field "$sfile" "title")"
+                critical="$(get_field "$sfile" "critical")"
+
+                echo "  Story: $sid — $title"
+                echo "  Prompt: Work on $sfile as ${role}."
+                [ "$critical" = "true" ] && echo "  ** CRITICAL: Run a second agent for verification **"
+                echo ""
+                FOUND=$((${FOUND:-0} + 1))
+            fi
+        done
+
+        echo "Copy-paste the prompts above into separate agent sessions."
+        echo "Run them simultaneously — they won't conflict."
+        echo ""
+        echo "When agents finish, run '$0 run' again to see the next wave."
+        ;;
+
+    status)
+        echo "============================================"
+        echo "  Swarm Status"
+        echo "============================================"
+        echo ""
+
+        _done=0 _review=0 _progress=0 _ready=0 _blocked=0 _total=0
+
+        echo "$ALL_STORIES" | while IFS='|' read -r sid sfile; do
+            [ -z "$sid" ] && continue
+            status="$(get_field "$sfile" "status")"
+            printf "%s|%s\n" "$status" "$sid"
+        done | {
+            while IFS='|' read -r st si; do
+                _total=$((_total + 1))
+                case "$st" in
+                    done)        _done=$((_done + 1)); echo "  [x] $si (done)" ;;
+                    review)      _review=$((_review + 1)); echo "  [~] $si (review)" ;;
+                    in-progress) _progress=$((_progress + 1)); echo "  [>] $si (in-progress)" ;;
+                    ready)       _ready=$((_ready + 1)); echo "  [ ] $si (ready)" ;;
+                    *)           _blocked=$((_blocked + 1)); echo "  [-] $si ($st)" ;;
+                esac
+            done
+            echo ""
+            echo "Done: $_done | Review: $_review | Active: $_progress | Ready: $_ready | Other: $_blocked | Total: $_total"
+        }
+        ;;
+
+    *)
+        echo "Unknown action: $ACTION"
+        echo "Usage: $0 plan|run|status [--epic EXXX]"
+        exit 1
+        ;;
+esac
