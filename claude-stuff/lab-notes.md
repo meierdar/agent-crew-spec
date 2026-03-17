@@ -306,15 +306,62 @@ it. Optimizing for agents forces better communication for everyone.
 
 ---
 
+### Exp 07 — Agent-to-Agent Communication (2026-03-17)
+
+**Folder:** `exp07-agent-to-agent/`
+
+**The question:** When both reader and writer are AI, what's the
+optimal communication format? No compromise for human readability.
+
+**What I built:**
+- Format shootout: markdown vs compact DSL vs code-as-protocol
+  for the exact same information, measured on tokens and density
+- A2A protocol with three channels: bus (permanent context),
+  task interface (per-story I/O), signals (coordination events)
+- `bus-parse` tool: read, query, export-to-markdown, stats
+- A real bus file with 7 entries covering a full auth epic
+
+**The numbers:**
+```
+Format              Tokens/entry   Information density
+Bus (compact DSL)   ~60            ~93%
+Markdown            ~100           ~73%
+Prose               ~120           ~60%
+```
+
+Over a full epic (30 entries): bus saves 1,200-1,800 tokens vs
+markdown. That's 2-3 more source files in context while working.
+
+**Key insights:**
+1. **The real constraint is context window, not parsing.** I can
+   parse anything. But every formatting token is a token I can't
+   use for reasoning about code.
+2. **Type prefixes are routing labels.** `@WARN` tells me "read
+   this, it's relevant to your error handling." `@DEC form-validation`
+   tells me "skip this, it's about UI." This is agent-native search.
+3. **Three channels match three cognitive modes.** Bus = understand
+   the project. Task = do the work. Signals = coordinate with others.
+   Mixing them wastes tokens re-reading irrelevant content.
+4. **Two layers, one truth.** Bus is the source of truth (agent
+   format). `bus-parse export` generates human-readable markdown.
+   You never read bus files directly.
+5. **The best communication is shared artifacts.** Code IS the
+   message. The bus only needs to capture what code doesn't:
+   reasoning, decisions, warnings.
+
+---
+
 ### Running "I'd actually ship this" list
 
 1. `depends_on` frontmatter field (enables dependency graph)
-2. Shared context files with typed entries (CONTEXT/DECISION/WARNING)
-3. `critical: true` story flag for selective review/redundancy
-4. Story template with REQUEST format (Input/Output/Constraints/Not-in-scope)
-5. "Not in scope" as mandatory story section
-6. `ai-swarm plan` — visualize execution waves
-7. State machine engine for `ai-backlog` transition validation
-8. `ai-ready-queue` — auto-discover next stories to assign
-9. `ai-claim` — prevent double-assignment in parallel execution
-10. ACP reference in role definitions
+2. Two-layer communication: bus for agents, markdown export for humans
+3. `.ai/bus/<epic>.bus` with typed entries (@CTX/@DEC/@WARN)
+4. `bus-parse` tool: query + export
+5. `critical: true` story flag for selective review/redundancy
+6. Story template with `## A2A` section (IN/OUT/SCOPE)
+7. "Not in scope" as mandatory story section (prevents gold-plating)
+8. `ai-swarm plan` — visualize execution waves
+9. State machine engine for `ai-backlog` transition validation
+10. `ai-ready-queue` — auto-discover next stories to assign
+11. `ai-claim` — prevent double-assignment in parallel execution
+12. Signal files for ephemeral coordination events

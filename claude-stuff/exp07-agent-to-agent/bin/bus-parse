@@ -1,0 +1,217 @@
+#!/bin/sh
+# bus-parse — read and query the context bus
+#
+# Usage:
+#   bus-parse read   <bus-file>                    — show all entries
+#   bus-parse query  <bus-file> <type> [name]      — filter by @CTX/@DEC/@WARN
+#   bus-parse export <bus-file>                    — export to human-readable markdown
+#   bus-parse stats  <bus-file>                    — token/entry counts
+#
+# The bus file is the agent-to-agent context store (compact DSL format).
+# This tool lets you read, query, and convert it.
+
+set -e
+
+ACTION="${1:?Usage: $0 read|query|export|stats <bus-file> [type] [name]}"
+BUS_FILE="${2:?Usage: $0 $ACTION <bus-file>}"
+
+# --- Helpers ---
+
+# Read a single entry starting at a given line pattern
+# Entries are delimited by "---" lines
+read_entries() {
+    _file="$1"
+    _type_filter="${2:-}"
+    _name_filter="${3:-}"
+
+    _in_entry=false
+    _entry_type=""
+    _entry_name=""
+    _entry_buf=""
+    _match=false
+
+    while IFS= read -r line; do
+        case "$line" in
+            @CTX\ *|@DEC\ *|@WARN\ *)
+                # Start of new entry — flush previous if it matched
+                if [ "$_match" = true ] && [ -n "$_entry_buf" ]; then
+                    printf '%s\n' "$_entry_buf"
+                    echo "---"
+                fi
+
+                # Parse header
+                _entry_type="${line%%\ *}"
+                _rest="${line#* }"
+                _entry_name="${_rest%%\ *}"
+                _entry_buf="$line"
+                _in_entry=true
+
+                # Check filters
+                _match=true
+                if [ -n "$_type_filter" ] && [ "$_entry_type" != "$_type_filter" ]; then
+                    _match=false
+                fi
+                if [ -n "$_name_filter" ] && [ "$_entry_name" != "$_name_filter" ]; then
+                    _match=false
+                fi
+                ;;
+            ---)
+                _in_entry=false
+                ;;
+            *)
+                if [ "$_in_entry" = true ]; then
+                    _entry_buf="$(printf '%s\n%s' "$_entry_buf" "$line")"
+                fi
+                ;;
+        esac
+    done < "$_file"
+
+    # Flush last entry
+    if [ "$_match" = true ] && [ -n "$_entry_buf" ]; then
+        printf '%s\n' "$_entry_buf"
+        echo "---"
+    fi
+}
+
+# Convert a single bus entry to markdown
+entry_to_markdown() {
+    _header_line=""
+    _body=""
+    _reading=false
+
+    while IFS= read -r line; do
+        case "$line" in
+            @CTX\ *)
+                _type="CONTEXT"
+                _rest="${line#@CTX }"
+                _name="${_rest%% *}"; _rest="${_rest#* }"
+                _agent="${_rest%% *}"; _rest="${_rest#* }"
+                _story="${_rest%% *}"; _rest="${_rest#* }"
+                _date="$_rest"
+                printf '## %s: %s\n' "$_type" "$_name"
+                printf '**Agent:** %s | **Story:** %s | **Date:** %s\n\n' "$_agent" "$_story" "$_date"
+                ;;
+            @DEC\ *)
+                _type="DECISION"
+                _rest="${line#@DEC }"
+                _name="${_rest%% *}"; _rest="${_rest#* }"
+                _agent="${_rest%% *}"; _rest="${_rest#* }"
+                _story="$_rest"
+                printf '## %s: %s\n' "$_type" "$_name"
+                printf '**Agent:** %s | **Story:** %s\n\n' "$_agent" "$_story"
+                ;;
+            @WARN\ *)
+                _type="WARNING"
+                _rest="${line#@WARN }"
+                _name="${_rest%% *}"; _rest="${_rest#* }"
+                _agent="${_rest%% *}"; _rest="${_rest#* }"
+                _story="$_rest"
+                printf '## %s: %s\n' "$_type" "$_name"
+                printf '**Agent:** %s | **Story:** %s\n\n' "$_agent" "$_story"
+                ;;
+            SCHEMA\ *)
+                printf '### Schema: %s\n\n' "${line#SCHEMA }"
+                printf '| Column | Type | Constraints | Default |\n'
+                printf '|--------|------|-------------|---------|\n'
+                ;;
+            "  "*)
+                # Indented line inside SCHEMA — parse as column definition
+                # Format: name  type  constraints  =default
+                _col="$(echo "$line" | awk '{print $1}')"
+                _coltype="$(echo "$line" | awk '{print $2}')"
+                _constraints="$(echo "$line" | awk '{print $3}' | sed 's/,/, /g' | sed 's/NN/NOT NULL/g')"
+                _default="$(echo "$line" | awk '{print $4}' | sed 's/^=//')"
+                [ -z "$_default" ] && _default="—"
+                printf '| %s | %s | %s | %s |\n' "$_col" "$_coltype" "$_constraints" "$_default"
+                ;;
+            FILE\ *)  printf '**File:** `%s`\n\n' "${line#FILE }" ;;
+            ENDPOINTS) printf '### Endpoints\n\n| Method | Path | Request | Response | Errors |\n|--------|------|---------|----------|--------|\n' ;;
+            "  POST "*)
+                _path="$(echo "$line" | awk '{print $2}')"
+                _in="$(echo "$line" | sed 's/.*IN{\([^}]*\)}.*/\1/')"
+                _out="$(echo "$line" | sed 's/.*OUT{\([^}]*\)}.*/\1/')"
+                _err="$(echo "$line" | sed 's/.*ERR\[\([^]]*\)].*/\1/')"
+                printf '| POST | %s | `{%s}` | `{%s}` | %s |\n' "$_path" "$_in" "$_out" "$_err"
+                ;;
+            "+"*" -"*)
+                # Decision: +chosen -rejected
+                _chose="$(echo "$line" | grep -o '+[^ ]*' | sed 's/+//g' | tr '\n' ', ' | sed 's/,$//')"
+                _over="$(echo "$line" | grep -o '\-[^ ]*' | sed 's/-//g' | tr '\n' ', ' | sed 's/,$//')"
+                printf '**Chose:** %s\n' "$_chose"
+                printf '**Over:** %s\n' "$_over"
+                ;;
+            WHY\ *)   printf '**Because:** %s\n' "${line#WHY }" ;;
+            REV\ *)   printf '**Reversible:** %s\n' "${line#REV }" ;;
+            AFF\ *)   printf '**Affects:** %s\n' "${line#AFF }" ;;
+            ON\ *)    printf '**Trigger:** %s\n' "${line#ON }" ;;
+            ERR\ *)   printf '**Error:** `%s`\n' "${line#ERR }" ;;
+            FIX\ *)   printf '**Fix:** `%s`\n' "${line#FIX }" ;;
+            SEV\ *)   printf '**Severity:** %s\n' "${line#SEV }" ;;
+            ERRORS\ *) printf '**Error shape:** `%s`\n\n' "${line#ERRORS }" ;;
+            WIDGET\ *) printf '**Widget:** `%s`\n' "${line#WIDGET }" ;;
+            FIELDS\ *) printf '**Fields:** %s\n' "${line#FIELDS }" ;;
+            STATES\ *) printf '**States:** %s\n' "${line#STATES }" ;;
+            EXPECTS\ *) printf '**Expects:** `%s`\n' "${line#EXPECTS }" ;;
+            ---) printf '\n---\n\n' ;;
+            *)   [ -n "$line" ] && printf '%s\n' "$line" ;;
+        esac
+    done
+}
+
+# --- Main ---
+
+case "$ACTION" in
+    read)
+        read_entries "$BUS_FILE"
+        ;;
+
+    query)
+        TYPE_FILTER="${3:-}"
+        NAME_FILTER="${4:-}"
+        # Normalize type filter to include @
+        case "$TYPE_FILTER" in
+            CTX|ctx)   TYPE_FILTER="@CTX" ;;
+            DEC|dec)   TYPE_FILTER="@DEC" ;;
+            WARN|warn) TYPE_FILTER="@WARN" ;;
+            @*)        ;;  # already has @
+            "")        ;;  # no filter
+        esac
+        read_entries "$BUS_FILE" "$TYPE_FILTER" "$NAME_FILTER"
+        ;;
+
+    export)
+        echo "# Shared Context (exported from bus)"
+        echo ""
+        read_entries "$BUS_FILE" | entry_to_markdown
+        ;;
+
+    stats)
+        _ctx=0 _dec=0 _warn=0 _total_lines=0
+        while IFS= read -r line; do
+            _total_lines=$((_total_lines + 1))
+            case "$line" in
+                @CTX\ *)  _ctx=$((_ctx + 1)) ;;
+                @DEC\ *)  _dec=$((_dec + 1)) ;;
+                @WARN\ *) _warn=$((_warn + 1)) ;;
+            esac
+        done < "$BUS_FILE"
+
+        _total_entries=$((_ctx + _dec + _warn))
+        _chars=$(wc -c < "$BUS_FILE" | tr -d ' ')
+        # Rough token estimate: ~4 chars per token
+        _est_tokens=$((_chars / 4))
+
+        echo "Bus: $BUS_FILE"
+        echo "Entries:  $_total_entries (@CTX: $_ctx, @DEC: $_dec, @WARN: $_warn)"
+        echo "Lines:    $_total_lines"
+        echo "Bytes:    $_chars"
+        echo "Est. tokens: ~$_est_tokens"
+        echo "Tokens/entry: ~$((_est_tokens / (_total_entries > 0 ? _total_entries : 1)))"
+        ;;
+
+    *)
+        echo "Unknown action: $ACTION"
+        echo "Usage: $0 read|query|export|stats <bus-file> [type] [name]"
+        exit 1
+        ;;
+esac
