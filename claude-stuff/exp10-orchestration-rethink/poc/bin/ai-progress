@@ -1,0 +1,180 @@
+#!/bin/sh
+# ai-progress — Record progress entries in a story's Progress section
+#
+# Usage:
+#   ai-progress <story-file> started              Mark story as started
+#   ai-progress <story-file> done <message>        Record completed step
+#   ai-progress <story-file> wip <message>         Record work-in-progress
+#   ai-progress <story-file> fix <message>         Record a fix/correction
+#   ai-progress <story-file> blocked <message>     Record a blocker
+#   ai-progress <story-file> verified              Record verification pass
+#   ai-progress <story-file> review                Mark story ready for review
+#   ai-progress <story-file> show                  Show current progress
+#
+# The agent calls this as it works, building a real-time log of what
+# actually happened — replacing pre-planned task checklists.
+#
+# Exit codes:
+#   0 = success
+#   2 = usage error
+
+set -e
+
+POC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CHECKPOINT_DIR="${POC_DIR}/checkpoints"
+
+# Colors
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[0;33m'
+    CYAN='\033[0;36m'
+    DIM='\033[0;90m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    GREEN='' RED='' YELLOW='' CYAN='' DIM='' BOLD='' RESET=''
+fi
+
+usage() {
+    sed -n '2,/^$/s/^# //p' "$0"
+    exit 2
+}
+
+[ $# -lt 2 ] && usage
+
+STORY_FILE="$1"
+ACTION="$2"
+shift 2
+MESSAGE="$*"
+
+[ ! -f "$STORY_FILE" ] && echo "Error: story not found: $STORY_FILE" >&2 && exit 2
+
+STORY_ID=$(grep '^id:' "$STORY_FILE" | head -1 | awk '{print $2}')
+CHECKPOINT_FILE="${CHECKPOINT_DIR}/${STORY_ID}.checkpoint"
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Ensure checkpoint dir exists
+mkdir -p "$CHECKPOINT_DIR"
+
+# --- Append to story's Progress section ---
+append_progress() {
+    _prefix="$1"
+    _icon="$2"
+    _msg="$3"
+    _time=$(date +%H:%M)
+
+    # Check if Progress section exists
+    if grep -q "^## Progress" "$STORY_FILE"; then
+        # Append after the Progress section (before next ## or EOF)
+        # Find the line number of ## Progress
+        _progress_line=$(grep -n "^## Progress" "$STORY_FILE" | head -1 | cut -d: -f1)
+
+        # Find next section or EOF
+        _next_section=$(tail -n +"$((_progress_line + 1))" "$STORY_FILE" | grep -n "^## " | head -1 | cut -d: -f1 || true)
+
+        if [ -n "$_next_section" ]; then
+            _insert_at=$((_progress_line + _next_section - 1))
+        else
+            _insert_at=$(wc -l < "$STORY_FILE")
+            _insert_at=$((_insert_at + 1))
+        fi
+
+        # Build the line
+        _line="- ${_icon} \`${_time}\` ${_msg}"
+
+        # Use sed to insert
+        if [ "$_insert_at" -gt "$(wc -l < "$STORY_FILE")" ]; then
+            echo "$_line" >> "$STORY_FILE"
+        else
+            sed -i "${_insert_at}i\\${_line}" "$STORY_FILE"
+        fi
+    else
+        # No Progress section — add one at the end
+        printf "\n## Progress\n\n- %s \`%s\` %s\n" "$_icon" "$_time" "$_msg" >> "$STORY_FILE"
+    fi
+}
+
+# --- Append to checkpoint file ---
+append_checkpoint() {
+    _action="$1"
+    _msg="$2"
+    echo "${TIMESTAMP} ${_action} ${_msg}" >> "$CHECKPOINT_FILE"
+}
+
+# --- Actions ---
+case "$ACTION" in
+
+    started)
+        # Update status in frontmatter
+        sed -i 's/^status:.*/status: in-progress/' "$STORY_FILE"
+        append_progress "STARTED" "[>]" "Work started"
+        append_checkpoint "STARTED" "by agent"
+        printf "${GREEN}Started${RESET} %s\n" "$STORY_ID"
+        ;;
+
+    done)
+        [ -z "$MESSAGE" ] && echo "Error: 'done' requires a message" >&2 && exit 2
+        append_progress "DONE" "[x]" "$MESSAGE"
+        append_checkpoint "DONE" "$MESSAGE"
+        printf "${GREEN}Done${RESET}: %s\n" "$MESSAGE"
+        ;;
+
+    wip)
+        [ -z "$MESSAGE" ] && echo "Error: 'wip' requires a message" >&2 && exit 2
+        append_progress "WIP" "[ ]" "$MESSAGE"
+        append_checkpoint "WIP" "$MESSAGE"
+        printf "${CYAN}WIP${RESET}: %s\n" "$MESSAGE"
+        ;;
+
+    fix)
+        [ -z "$MESSAGE" ] && echo "Error: 'fix' requires a message" >&2 && exit 2
+        append_progress "FIX" "[!]" "$MESSAGE"
+        append_checkpoint "FIX" "$MESSAGE"
+        printf "${YELLOW}Fix${RESET}: %s\n" "$MESSAGE"
+        ;;
+
+    blocked)
+        [ -z "$MESSAGE" ] && echo "Error: 'blocked' requires a message" >&2 && exit 2
+        append_progress "BLOCKED" "[B]" "$MESSAGE"
+        append_checkpoint "BLOCKED" "$MESSAGE"
+        printf "${RED}Blocked${RESET}: %s\n" "$MESSAGE"
+        ;;
+
+    verified)
+        append_progress "VERIFIED" "[v]" "All checks passed"
+        append_checkpoint "VERIFY_PASS" "all checks passed"
+        printf "${GREEN}Verified${RESET}\n"
+        ;;
+
+    review)
+        sed -i 's/^status:.*/status: review/' "$STORY_FILE"
+        append_progress "REVIEW" "[R]" "Ready for human review"
+        append_checkpoint "REVIEW" "submitted for review"
+        printf "${CYAN}Review${RESET}: %s marked for review\n" "$STORY_ID"
+        ;;
+
+    show)
+        printf "${BOLD}Progress: %s${RESET}\n\n" "$STORY_ID"
+        if [ -f "$CHECKPOINT_FILE" ]; then
+            cat "$CHECKPOINT_FILE"
+        else
+            echo "(no progress recorded yet)"
+        fi
+
+        printf "\n${BOLD}Story Progress Section:${RESET}\n\n"
+        _in_progress=false
+        while IFS= read -r line; do
+            case "$line" in
+                "## Progress"*) _in_progress=true; continue ;;
+                "## "*) [ "$_in_progress" = true ] && break ;;
+            esac
+            [ "$_in_progress" = true ] && echo "$line"
+        done < "$STORY_FILE"
+        ;;
+
+    *)
+        echo "Error: unknown action '$ACTION'" >&2
+        usage
+        ;;
+esac

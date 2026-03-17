@@ -1,0 +1,10 @@
+2026-03-17T08:28:15Z STARTED by agent
+2026-03-17T08:28:22Z DONE Created LoginScreen at lib/features/auth/presentation/login_screen.dart
+2026-03-17T08:28:22Z DONE Created RegisterScreen at lib/features/auth/presentation/register_screen.dart
+2026-03-17T08:28:22Z DONE Form validation: email regex, password min 8 chars
+2026-03-17T08:28:23Z FIX Discovered AuthRepository.signUp throws untyped exception on duplicate — wrapped in AuthException
+2026-03-17T08:28:23Z DONE Snackbar error handling for Supabase errors
+2026-03-17T08:28:23Z WIP Writing widget tests
+2026-03-17T08:28:36Z VERIFY_PASS 0/0 checks passed
+2026-03-17T08:29:43Z VERIFY_FAIL 18/18 checks failed
+2026-03-17T08:29:49Z VERIFY_FAIL 3/7 checks failed
