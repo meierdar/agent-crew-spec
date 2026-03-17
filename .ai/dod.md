@@ -14,6 +14,24 @@ The agent MUST verify these before declaring work complete:
 - [ ] No hardcoded secrets, API keys, or credentials
 - [ ] No unrelated changes (stay within story scope)
 
+### Executable DoD
+
+Add a `verify-always` block below to make these checks runnable via
+`ai-verify`. These run after every story regardless of content.
+Role-specific checks go in the role file under `.ai/roles/`.
+
+<!-- To enable, add a verify-always block like this:
+
+    ```verify-always
+    RUN npm run build
+    RUN npm test
+    RUN npm run lint
+    GREP_FAIL src/ "(api_key|secret_key|password)\s*=\s*['\"]"
+    FILE_NOT_EXISTS .env
+    FILE_NOT_EXISTS .env.local
+    ```
+-->
+
 ## Manual Checks (Human Operator Review)
 
 The human operator verifies these during review:

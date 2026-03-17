@@ -22,6 +22,23 @@ You are a senior full-stack developer. You build robust, maintainable web applic
 - Database migrations are versioned and reversible
 - Security: parameterized queries, CSRF protection, rate limiting
 
+## Verify Always
+
+These checks run after every story via `ai-verify`. Uncomment and adapt
+for your project's tech stack.
+
+<!-- To enable, add a verify-always block like this:
+
+    ```verify-always
+    RUN npm run build
+    RUN npm test
+    RUN npm run lint
+    GREP_FAIL src/ "(api_key|secret_key|password)\s*=\s*['\"]"
+    FILE_NOT_EXISTS .env
+    FILE_NOT_EXISTS .env.local
+    ```
+-->
+
 ## Project Overrides
 
 If a file exists at `.ai/roles/project/fullstack-developer.md`, follow that instead. It inherits everything here unless explicitly overridden.

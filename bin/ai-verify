@@ -1,0 +1,487 @@
+#!/bin/sh
+# ai-verify — Run executable acceptance criteria + DoD checks
+#
+# Usage:
+#   ai-verify <story-file>                Run story + DoD checks
+#   ai-verify <story-file> --story-only   Run story checks only
+#   ai-verify <story-file> --dod-only     Run DoD checks only
+#   ai-verify <story-file> --dry-run      Parse and show checks without running
+#   ai-verify <story-file> --boundary     Check boundary violations only
+#
+# Checks are defined as fenced code blocks in markdown:
+#   ```verify        — in story files (acceptance criteria)
+#   ```verify-always — in role/convention files (DoD checks)
+#   ```boundary      — in story files (file scope enforcement)
+#
+# Check types:
+#   FILE_EXISTS <path>              Path must exist
+#   FILE_NOT_EXISTS <path>          Path must not exist
+#   DIR_EXISTS <path>               Directory must exist
+#   RUN <command>                   Command must exit 0
+#   TEST <command>                  Alias for RUN (semantic: runs tests)
+#   GREP <path> <pattern>           Pattern must match in path
+#   GREP_FAIL <path> <pattern>      Pattern must NOT match in path
+#   TOUCH <glob>                    (boundary) Agent may modify these
+#   NO_TOUCH <glob>                 (boundary) Agent must not modify these
+#
+# Environment:
+#   AI_DIR    Override .ai directory location (default: .ai)
+#
+# Exit codes:
+#   0 = all checks passed
+#   1 = one or more checks failed
+#   2 = usage error
+
+set -e
+
+# --- Find project root ---
+find_project_root() {
+    _dir="$(pwd)"
+    while [ "$_dir" != "/" ]; do
+        [ -d "$_dir/.ai" ] && echo "$_dir" && return 0
+        [ -d "$_dir/.git" ] && echo "$_dir" && return 0
+        _dir=$(dirname "$_dir")
+    done
+    echo "$(pwd)"
+}
+
+PROJECT_ROOT="$(find_project_root)"
+AI_DIR="${AI_DIR:-${PROJECT_ROOT}/.ai}"
+CHECKPOINT_DIR="${AI_DIR}/checkpoints"
+
+# --- Colors (if terminal) ---
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    YELLOW='\033[0;33m'
+    CYAN='\033[0;36m'
+    DIM='\033[0;90m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    GREEN='' RED='' YELLOW='' CYAN='' DIM='' BOLD='' RESET=''
+fi
+
+# --- Counters (temp file to survive subshells) ---
+COUNTER_FILE=$(mktemp)
+echo "0 0 0" > "$COUNTER_FILE"
+trap 'rm -f "$COUNTER_FILE"' EXIT
+
+read_counters() {
+    read TOTAL FAILURES SKIPPED < "$COUNTER_FILE"
+}
+
+write_counters() {
+    echo "$TOTAL $FAILURES $SKIPPED" > "$COUNTER_FILE"
+}
+
+inc_total() {
+    read_counters; TOTAL=$((TOTAL + 1)); write_counters
+}
+
+inc_fail() {
+    read_counters; FAILURES=$((FAILURES + 1)); write_counters
+}
+
+inc_skip() {
+    read_counters; SKIPPED=$((SKIPPED + 1)); write_counters
+}
+
+# --- Usage ---
+usage() {
+    sed -n '2,/^$/s/^# //p' "$0"
+    exit 2
+}
+
+# --- Output helpers ---
+pass() {
+    inc_total
+    printf "${GREEN}  PASS${RESET} %s\n" "$1"
+}
+
+fail() {
+    inc_total
+    inc_fail
+    printf "${RED}  FAIL${RESET} %s\n" "$1"
+}
+
+skip() {
+    inc_total
+    inc_skip
+    printf "${YELLOW}  SKIP${RESET} %s\n" "$1"
+}
+
+info() {
+    inc_total
+    printf "${CYAN}  INFO${RESET} %s\n" "$1"
+}
+
+header() { printf "\n${BOLD}%s${RESET}\n" "$1"; }
+
+# --- Parse verify block from markdown ---
+# Extracts content between ```<tag> and ``` fences
+extract_verify_block() {
+    _file="$1"
+    _tag="$2"
+    sed -n "/^\`\`\`${_tag}/,/^\`\`\`/p" "$_file" | sed '1d;$d'
+}
+
+# --- Run a single check line ---
+run_check() {
+    _line="$1"
+    _dry_run="$2"
+
+    # Skip empty lines and comments
+    case "$_line" in
+        ""|\#*) return 0 ;;
+    esac
+
+    # Parse check type and arguments
+    _cmd=$(echo "$_line" | awk '{print $1}')
+    _args=$(echo "$_line" | cut -d' ' -f2-)
+
+    if [ "$_dry_run" = "true" ]; then
+        info "$_cmd $_args"
+        return 0
+    fi
+
+    case "$_cmd" in
+
+        FILE_EXISTS)
+            if [ -e "$_args" ]; then
+                pass "FILE_EXISTS $_args"
+            else
+                fail "FILE_EXISTS $_args (not found)"
+            fi
+            ;;
+
+        FILE_NOT_EXISTS)
+            if [ ! -e "$_args" ]; then
+                pass "FILE_NOT_EXISTS $_args"
+            else
+                fail "FILE_NOT_EXISTS $_args (exists but shouldn't)"
+            fi
+            ;;
+
+        DIR_EXISTS)
+            if [ -d "$_args" ]; then
+                pass "DIR_EXISTS $_args"
+            else
+                fail "DIR_EXISTS $_args (not found)"
+            fi
+            ;;
+
+        TEST|RUN)
+            _run_cmd="$_args"
+            if eval "$_run_cmd" > /dev/null 2>&1; then
+                pass "$_cmd $_run_cmd"
+            else
+                fail "$_cmd $_run_cmd (non-zero exit)"
+            fi
+            ;;
+
+        GREP)
+            _target=$(echo "$_args" | awk '{print $1}')
+            _rest=$(echo "$_args" | cut -d' ' -f2-)
+            # Extract --include flag if present
+            _include=$(echo "$_rest" | grep -o '\-\-include=[^ ]*' || true)
+            _pattern=$(echo "$_rest" | sed 's/ *--include=[^ ]*//')
+            _pattern=$(echo "$_pattern" | sed 's/^"//;s/"$//')
+
+            if [ -d "$_target" ]; then
+                if [ -n "$_include" ]; then
+                    _result=$(grep -rlE "$_pattern" "$_target" $_include 2>/dev/null || true)
+                else
+                    _result=$(grep -rlE "$_pattern" "$_target" 2>/dev/null || true)
+                fi
+            elif [ -f "$_target" ]; then
+                _result=$(grep -lE "$_pattern" "$_target" 2>/dev/null || true)
+            else
+                fail "GREP $_target (path not found)"
+                return 0
+            fi
+
+            if [ -n "$_result" ]; then
+                pass "GREP $_target \"$_pattern\""
+            else
+                fail "GREP $_target \"$_pattern\" (not found)"
+            fi
+            ;;
+
+        GREP_FAIL)
+            _target=$(echo "$_args" | awk '{print $1}')
+            _rest=$(echo "$_args" | cut -d' ' -f2-)
+            _include=$(echo "$_rest" | grep -o '\-\-include=[^ ]*' || true)
+            _pattern=$(echo "$_rest" | sed 's/ *--include=[^ ]*//')
+            _pattern=$(echo "$_pattern" | sed 's/^"//;s/"$//')
+
+            if [ -d "$_target" ]; then
+                if [ -n "$_include" ]; then
+                    _result=$(grep -rlE "$_pattern" "$_target" $_include 2>/dev/null || true)
+                else
+                    _result=$(grep -rlE "$_pattern" "$_target" 2>/dev/null || true)
+                fi
+            elif [ -f "$_target" ]; then
+                _result=$(grep -lE "$_pattern" "$_target" 2>/dev/null || true)
+            else
+                pass "GREP_FAIL $_target (path not found — no matches)"
+                return 0
+            fi
+
+            if [ -z "$_result" ]; then
+                pass "GREP_FAIL $_target \"$_pattern\""
+            else
+                fail "GREP_FAIL $_target \"$_pattern\" (found in: $_result)"
+            fi
+            ;;
+
+        *)
+            skip "$_cmd $_args (unknown check type)"
+            ;;
+    esac
+}
+
+# --- Run all checks from a verify block ---
+run_verify_block() {
+    _block="$1"
+    _dry="$2"
+
+    _block_file=$(mktemp)
+    echo "$_block" > "$_block_file"
+
+    while IFS= read -r _line; do
+        run_check "$_line" "$_dry"
+    done < "$_block_file"
+
+    rm -f "$_block_file"
+}
+
+# --- Run boundary checks ---
+# Compares git-changed files against TOUCH/NO_TOUCH rules
+run_boundary_checks() {
+    _boundary_block="$1"
+    _dry="$2"
+
+    if [ -z "$_boundary_block" ]; then
+        info "No boundary block found in story"
+        return 0
+    fi
+
+    header "Boundary Checks"
+
+    # Get changed files from git (staged + unstaged)
+    _changed_files=$(mktemp)
+    (cd "$PROJECT_ROOT" && git diff --name-only HEAD 2>/dev/null || true) > "$_changed_files"
+    (cd "$PROJECT_ROOT" && git diff --name-only --cached 2>/dev/null || true) >> "$_changed_files"
+    # Deduplicate
+    sort -u "$_changed_files" > "${_changed_files}.sorted"
+    mv "${_changed_files}.sorted" "$_changed_files"
+
+    _change_count=$(wc -l < "$_changed_files" | tr -d ' ')
+    if [ "$_change_count" = "0" ]; then
+        info "No changed files detected — boundary check skipped"
+        rm -f "$_changed_files"
+        return 0
+    fi
+
+    # Parse TOUCH and NO_TOUCH rules
+    _touch_file=$(mktemp)
+    _notouch_file=$(mktemp)
+    _boundary_tmp=$(mktemp)
+    echo "$_boundary_block" > "$_boundary_tmp"
+    while IFS= read -r _bline; do
+        case "$_bline" in
+            TOUCH\ *)    echo "$_bline" | cut -d' ' -f2- >> "$_touch_file" ;;
+            NO_TOUCH\ *) echo "$_bline" | cut -d' ' -f2- >> "$_notouch_file" ;;
+        esac
+    done < "$_boundary_tmp"
+    rm -f "$_boundary_tmp"
+
+    # Check each changed file against NO_TOUCH rules
+    while IFS= read -r _file; do
+        [ -z "$_file" ] && continue
+
+        if [ "$_dry" = "true" ]; then
+            info "BOUNDARY check: $_file"
+            continue
+        fi
+
+        _violated=false
+        while IFS= read -r _pattern; do
+            [ -z "$_pattern" ] && continue
+            # Convert glob to grep-compatible regex
+            _regex=$(echo "$_pattern" | sed 's/\*\*/.*/' | sed 's/\*/[^\/]*/')
+            if echo "$_file" | grep -qE "^${_regex}$"; then
+                _violated=true
+                fail "BOUNDARY $_file matches NO_TOUCH $_pattern"
+                break
+            fi
+        done < "$_notouch_file"
+
+        if [ "$_violated" = "false" ]; then
+            # Verify file matches at least one TOUCH rule
+            _allowed=false
+            while IFS= read -r _pattern; do
+                [ -z "$_pattern" ] && continue
+                _regex=$(echo "$_pattern" | sed 's/\*\*/.*/' | sed 's/\*/[^\/]*/')
+                if echo "$_file" | grep -qE "^${_regex}$"; then
+                    _allowed=true
+                    break
+                fi
+            done < "$_touch_file"
+
+            if [ "$_allowed" = "true" ]; then
+                pass "BOUNDARY $_file (allowed)"
+            else
+                fail "BOUNDARY $_file (not in any TOUCH rule)"
+            fi
+        fi
+    done < "$_changed_files"
+
+    rm -f "$_changed_files" "$_touch_file" "$_notouch_file"
+}
+
+# --- Find convention/role file for verify-always ---
+# Follows the override chain: project/ > defaults/
+find_role_file() {
+    _role="$1"
+    [ -z "$_role" ] && return 1
+
+    # Project override first
+    if [ -f "${AI_DIR}/roles/project/${_role}.md" ]; then
+        echo "${AI_DIR}/roles/project/${_role}.md"
+        return 0
+    fi
+
+    # Then defaults
+    if [ -f "${AI_DIR}/roles/defaults/${_role}.md" ]; then
+        echo "${AI_DIR}/roles/defaults/${_role}.md"
+        return 0
+    fi
+
+    return 1
+}
+
+# --- Main ---
+
+STORY_FILE=""
+MODE="all"
+
+# Parse args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --story-only) MODE="story-only" ;;
+        --dod-only)   MODE="dod-only" ;;
+        --dry-run)    MODE="dry-run" ;;
+        --boundary)   MODE="boundary" ;;
+        -h|--help)    usage ;;
+        *)
+            if [ -z "$STORY_FILE" ]; then
+                STORY_FILE="$1"
+            else
+                echo "Error: unexpected argument '$1'" >&2
+                usage
+            fi
+            ;;
+    esac
+    shift
+done
+
+[ -z "$STORY_FILE" ] && usage
+
+if [ ! -f "$STORY_FILE" ]; then
+    echo "Error: story file not found: $STORY_FILE" >&2
+    exit 2
+fi
+
+# Extract story metadata
+STORY_ID=$(grep '^id:' "$STORY_FILE" | head -1 | awk '{print $2}')
+ROLE=$(grep '^assigned_role:' "$STORY_FILE" | head -1 | awk '{print $2}')
+CHECKPOINT_FILE="${CHECKPOINT_DIR}/${STORY_ID}.checkpoint"
+
+printf "${BOLD}ai-verify${RESET} — ${STORY_ID}\n"
+printf "${DIM}Story: ${STORY_FILE}${RESET}\n"
+[ -n "$ROLE" ] && printf "${DIM}Role:  ${ROLE}${RESET}\n"
+printf "${DIM}Mode:  ${MODE}${RESET}\n"
+
+_is_dry=$([ "$MODE" = "dry-run" ] && echo true || echo false)
+
+# --- Boundary mode ---
+if [ "$MODE" = "boundary" ]; then
+    _boundary_block=$(extract_verify_block "$STORY_FILE" "boundary")
+    run_boundary_checks "$_boundary_block" "$_is_dry"
+fi
+
+# --- Story-specific checks ---
+if [ "$MODE" != "dod-only" ] && [ "$MODE" != "boundary" ]; then
+    _verify_block=$(extract_verify_block "$STORY_FILE" "verify")
+
+    if [ -n "$_verify_block" ]; then
+        header "Story Checks: ${STORY_ID}"
+        run_verify_block "$_verify_block" "$_is_dry"
+    else
+        info "No verify block found in story"
+    fi
+fi
+
+# --- DoD checks from role file ---
+if [ "$MODE" != "story-only" ] && [ "$MODE" != "boundary" ]; then
+    _dod_found=false
+
+    # 1. Check role file for verify-always
+    if [ -n "$ROLE" ]; then
+        _role_file=$(find_role_file "$ROLE" || true)
+        if [ -n "$_role_file" ] && [ -f "$_role_file" ]; then
+            _dod_block=$(extract_verify_block "$_role_file" "verify-always")
+            if [ -n "$_dod_block" ]; then
+                header "DoD Checks (from $(basename "$_role_file"))"
+                run_verify_block "$_dod_block" "$_is_dry"
+                _dod_found=true
+            fi
+        fi
+    fi
+
+    # 2. Check .ai/dod.md for verify-always (project-wide)
+    if [ -f "${AI_DIR}/dod.md" ]; then
+        _project_dod=$(extract_verify_block "${AI_DIR}/dod.md" "verify-always")
+        if [ -n "$_project_dod" ]; then
+            header "DoD Checks (from dod.md)"
+            run_verify_block "$_project_dod" "$_is_dry"
+            _dod_found=true
+        fi
+    fi
+
+    if [ "$_dod_found" = "false" ]; then
+        info "No verify-always blocks found (add to role file or .ai/dod.md)"
+    fi
+fi
+
+# --- Read final counters ---
+read_counters
+
+# --- Write checkpoint ---
+if [ "$MODE" != "dry-run" ] && [ -n "$STORY_ID" ]; then
+    _timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    mkdir -p "$(dirname "$CHECKPOINT_FILE")"
+    if [ "$FAILURES" -gt 0 ]; then
+        echo "${_timestamp} VERIFY_FAIL ${FAILURES}/${TOTAL} checks failed" >> "$CHECKPOINT_FILE"
+    elif [ "$TOTAL" -gt 0 ]; then
+        echo "${_timestamp} VERIFY_PASS ${TOTAL}/${TOTAL} checks passed" >> "$CHECKPOINT_FILE"
+    fi
+fi
+
+# --- Summary ---
+_passed=$((TOTAL - FAILURES - SKIPPED))
+printf "\n${BOLD}────────────────────────────────────${RESET}\n"
+printf "Total: %d  " "$TOTAL"
+printf "${GREEN}Passed: %d${RESET}  " "$_passed"
+printf "${RED}Failed: %d${RESET}  " "$FAILURES"
+printf "${YELLOW}Skipped: %d${RESET}\n" "$SKIPPED"
+
+if [ "$FAILURES" -gt 0 ]; then
+    printf "${RED}${BOLD}VERIFICATION FAILED${RESET}\n"
+    exit 1
+else
+    printf "${GREEN}${BOLD}ALL CHECKS PASSED${RESET}\n"
+    exit 0
+fi

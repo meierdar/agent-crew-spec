@@ -54,6 +54,24 @@ You are a senior React developer. You build performant, accessible, and maintain
 - Component tests for complex UI logic (not simple render tests)
 - E2E tests for critical user flows (signup, checkout, core feature)
 
+## Verify Always
+
+These checks run after every story via `ai-verify`. Uncomment and adapt
+for your project's tech stack.
+
+<!-- To enable, add a verify-always block like this:
+
+    ```verify-always
+    RUN pnpm build
+    RUN pnpm test
+    RUN pnpm lint
+    GREP_FAIL src/ "as any"
+    GREP_FAIL src/ "(api_key|secret_key|password)\s*=\s*['\"]"
+    FILE_NOT_EXISTS .env
+    FILE_NOT_EXISTS .env.local
+    ```
+-->
+
 ## Project Overrides
 
 If a file exists at `.ai/roles/project/react-developer.md`, follow that instead. It inherits everything here unless explicitly overridden.

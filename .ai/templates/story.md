@@ -18,19 +18,39 @@ What needs to be done, and why? Provide enough context that an agent can work in
 
 ## Acceptance Criteria
 
-- [ ] [Observable outcome 1 — what the user/system can do when this is done]
-- [ ] [Observable outcome 2]
-- [ ] [Observable outcome 3]
+### Verifiable (agent runs these)
 
-## Tasks
+<!-- Executable checks run by `ai-verify`. Remove this comment and add checks. -->
+<!-- See bin/ai-verify for available check types. -->
 
-- [ ] [Concrete implementation step 1]
-- [ ] [Concrete implementation step 2]
-- [ ] [Concrete implementation step 3]
+```verify
+FILE_EXISTS path/to/expected/file
+TEST your-test-command
+GREP path/to/file "expected pattern"
+```
+
+### Human-verified (reviewer checks these)
+
+- [ ] [Visual/UX outcome that requires human judgement]
+- [ ] [Outcome that can't be automated]
+
+## Boundary
+
+<!-- Optional: restrict which files the agent may touch. -->
+<!-- Run with: ai-verify <story> --boundary -->
+
+```boundary
+TOUCH path/to/allowed/**
+NO_TOUCH path/to/protected/**
+```
 
 ## Technical Notes
 
 Constraints, dependencies, relevant architecture decisions, or files to look at.
+
+## Progress
+
+<!-- Agent writes here as it works via ai-progress. Do not pre-fill. -->
 
 ## Blockers
 
