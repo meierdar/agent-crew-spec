@@ -1,0 +1,53 @@
+@CTX users-table db-engineer E001-S001 2026-03-16
+FILE db/migrations/001_create_users.sql
+SCHEMA users
+  id            uuid          PK           =uuid_generate_v4()
+  email         varchar       UNIQUE,NN
+  name          varchar       NN
+  password_hash varchar       NN
+  created_at    timestamptz   NN           =now()
+---
+
+@DEC no-soft-delete db-engineer E001-S001
++hard_delete -soft_delete
+WHY no product requirement; non-breaking to add later
+REV yes
+AFF any agent writing DELETE queries on users
+---
+
+@DEC auth-provider backend-developer E001-S002
++supabase_auth -custom_jwt -firebase_auth
+WHY epic E001 says "use Supabase where possible"
+REV no
+AFF all auth endpoints and token handling
+---
+
+@CTX auth-api-contract backend-developer E001-S002 2026-03-16
+FILE docs/api/auth.yaml
+ENDPOINTS
+  POST /auth/login    IN{email,password}     OUT{token,user}    ERR[401,422]
+  POST /auth/register IN{email,password,name} OUT{user}          ERR[409,422]
+ERRORS shape:{code:string,message:string}
+---
+
+@WARN duplicate-email db-engineer E001-S001
+ON INSERT users WHERE email already exists
+ERR pg:unique_violation/23505
+FIX catch>HTTP409 body:{code:"EMAIL_EXISTS",message:"Account exists"}
+SEV high
+---
+
+@CTX login-ui flutter-developer E001-S004 2026-03-16
+FILE lib/features/auth/ui/login_screen.dart
+WIDGET LoginScreen
+FIELDS email(TextFormField,regex_validated) password(TextFormField,min8)
+STATES submit>loading(CircularProgressIndicator) error>snackbar(red,message)
+EXPECTS api_error_shape:{code,message}
+---
+
+@DEC form-validation flutter-developer E001-S004
++client_side_validation -server_only
+WHY immediate UX feedback; server validates too (defense in depth)
+REV yes
+AFF no downstream impact
+---

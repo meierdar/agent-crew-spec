@@ -1,0 +1,215 @@
+#!/bin/sh
+# ai-prep — generate the ## A2A section for a story
+#
+# Usage: ai-prep <story.md> [--bus <bus-file>]
+#
+# Reads the story's frontmatter + prose, reads the context bus for
+# the story's epic, and generates a structured A2A section that an
+# agent can read with zero ambiguity.
+#
+# If the story already has an ## A2A section, it's replaced.
+# If not, it's inserted after the frontmatter.
+
+set -e
+
+STORY_FILE="${1:?Usage: $0 <story.md> [--bus <bus-file>]}"
+BUS_FILE=""
+
+shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --bus) BUS_FILE="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# --- Frontmatter parsing ---
+
+get_field() {
+    sed -n '/^---$/,/^---$/p' "$1" \
+        | grep "^${2}:" | head -1 \
+        | sed "s/^${2}: *//" | tr -d '"' | tr -d "'"
+}
+
+get_list_field() {
+    sed -n '/^---$/,/^---$/p' "$1" \
+        | sed -n "/^${2}:/,/^[a-z]/p" \
+        | grep '^ *-' \
+        | sed 's/^ *- *//' | sed 's/ *#.*//' | tr -d '"' | tr -d "'"
+}
+
+# --- Extract story metadata ---
+
+STORY_ID="$(get_field "$STORY_FILE" "id")"
+EPIC_ID="$(get_field "$STORY_FILE" "epic")"
+ROLE="$(get_field "$STORY_FILE" "assigned_role")"
+ESTIMATE="$(get_field "$STORY_FILE" "estimate")"
+CRITICAL="$(get_field "$STORY_FILE" "critical")"
+DEPS="$(get_list_field "$STORY_FILE" "depends_on")"
+
+# Find bus file if not specified
+if [ -z "$BUS_FILE" ]; then
+    for _try in ".ai/bus/${EPIC_ID}.bus" ".ai/bus/${EPIC_ID}.bus"; do
+        [ -f "$_try" ] && BUS_FILE="$_try" && break
+    done
+fi
+
+# --- Extract references from prose ---
+# Look for file paths, story references, and technical terms
+
+BODY="$(sed '1,/^---$/d' "$STORY_FILE" | sed '1,/^---$/d')"
+
+# Find file paths mentioned in the story (patterns like lib/..., src/..., etc.)
+FILE_REFS="$(echo "$BODY" | grep -oE '[a-zA-Z_./]+\.[a-zA-Z]+' | grep '/' | sort -u || true)"
+
+# Find story ID references (E001-S001 patterns)
+STORY_REFS="$(echo "$BODY" | grep -oE 'E[0-9]+-S[0-9]+' | sort -u || true)"
+
+# --- Extract acceptance criteria ---
+CRITERIA="$(echo "$BODY" | sed -n '/^## Acceptance/,/^## /p' | grep '^\- \[' | sed 's/^- \[ \] //' | sed 's/^- \[x\] //')"
+
+# --- Build bus references ---
+BUS_REFS=""
+if [ -n "$BUS_FILE" ] && [ -f "$BUS_FILE" ]; then
+    # Find all @CTX entries that match dependency stories
+    for dep in $DEPS; do
+        DEP_CTXS="$(grep "^@CTX.*${dep}" "$BUS_FILE" | awk '{print $2}' || true)"
+        for ctx in $DEP_CTXS; do
+            BUS_REFS="${BUS_REFS}IN ${BUS_FILE} @CTX:${ctx}
+"
+        done
+    done
+
+    # Always include all warnings
+    HAS_WARNS="$(grep -c '^@WARN' "$BUS_FILE" 2>/dev/null || echo 0)"
+    if [ "$HAS_WARNS" -gt 0 ]; then
+        BUS_REFS="${BUS_REFS}IN ${BUS_FILE} @WARN:*
+"
+    fi
+
+    # Include relevant decisions
+    for dep in $DEPS; do
+        DEP_DECS="$(grep "^@DEC.*${dep}" "$BUS_FILE" | awk '{print $2}' || true)"
+        for dec in $DEP_DECS; do
+            BUS_REFS="${BUS_REFS}IN ${BUS_FILE} @DEC:${dec}
+"
+        done
+    done
+fi
+
+# --- Generate A2A section ---
+
+A2A="## A2A
+
+@STORY ${STORY_ID} ${ROLE} ${ESTIMATE}${CRITICAL:+ critical}
+"
+
+# Input references
+if [ -n "$BUS_REFS" ]; then
+    A2A="${A2A}${BUS_REFS}"
+fi
+
+for ref in $FILE_REFS; do
+    A2A="${A2A}IN ${ref}
+"
+done
+
+# Acceptance criteria as DONE_WHEN
+if [ -n "$CRITERIA" ]; then
+    A2A="${A2A}
+DONE_WHEN"
+    echo "$CRITERIA" | while IFS= read -r crit; do
+        printf '  %s\n' "$crit"
+    done | {
+        _done=""
+        while IFS= read -r line; do
+            _done="${_done}
+${line}"
+        done
+        A2A="${A2A}${_done}"
+        echo "$A2A"
+    }
+else
+    echo "$A2A"
+fi
+
+# --- Inject into story file ---
+# Strategy: if ## A2A exists, replace it. If not, insert after frontmatter.
+
+TMPFILE="$(mktemp)"
+
+if grep -q '^## A2A' "$STORY_FILE"; then
+    # Replace existing A2A section (from ## A2A to next ## or EOF)
+    awk '
+        /^## A2A/ { skip=1; next }
+        /^## / && skip { skip=0 }
+        !skip { print }
+    ' "$STORY_FILE" > "$TMPFILE"
+else
+    # No A2A section — insert after frontmatter
+    cp "$STORY_FILE" "$TMPFILE"
+fi
+
+# Find where to insert (after frontmatter, before ## Description or first ##)
+{
+    # Write everything up to the first ## after frontmatter
+    _past_frontmatter=0
+    _a2a_written=0
+    while IFS= read -r line; do
+        case "$line" in
+            '---')
+                _past_frontmatter=$((_past_frontmatter + 1))
+                echo "$line"
+                if [ "$_past_frontmatter" -eq 2 ]; then
+                    echo ""
+                    # Generate A2A fresh
+                    echo "## A2A"
+                    echo ""
+                    printf '@STORY %s %s %s' "$STORY_ID" "$ROLE" "$ESTIMATE"
+                    [ "$CRITICAL" = "true" ] && printf ' critical'
+                    echo ""
+
+                    if [ -n "$BUS_REFS" ]; then
+                        printf '%s' "$BUS_REFS"
+                    fi
+
+                    for ref in $FILE_REFS; do
+                        echo "IN ${ref}"
+                    done
+
+                    if [ -n "$CRITERIA" ]; then
+                        echo ""
+                        echo "DONE_WHEN"
+                        echo "$CRITERIA" | while IFS= read -r crit; do
+                            printf '  %s\n' "$crit"
+                        done
+                    fi
+
+                    echo ""
+                    _a2a_written=1
+                fi
+                ;;
+            *)
+                # Skip any existing ## A2A content when rebuilding
+                if [ "$_a2a_written" -eq 1 ]; then
+                    case "$line" in
+                        '## A2A'|'@STORY '*|'IN '*|'OUT '*|'SCOPE '*|'DONE_WHEN'*|'  '*)
+                            continue ;;
+                    esac
+                    # Once we hit non-A2A content, stop filtering
+                    [ -n "$line" ] && _a2a_written=2
+                fi
+                echo "$line"
+                ;;
+        esac
+    done < "$TMPFILE"
+} > "${STORY_FILE}.new"
+
+mv "${STORY_FILE}.new" "$STORY_FILE"
+rm -f "$TMPFILE"
+
+echo "Prepared: $STORY_FILE"
+echo "  A2A section generated with:"
+[ -n "$BUS_REFS" ] && echo "    - $(echo "$BUS_REFS" | grep -c 'IN') bus references"
+[ -n "$FILE_REFS" ] && echo "    - $(echo "$FILE_REFS" | wc -w | tr -d ' ') file references"
+[ -n "$CRITERIA" ] && echo "    - $(echo "$CRITERIA" | wc -l | tr -d ' ') acceptance criteria"
