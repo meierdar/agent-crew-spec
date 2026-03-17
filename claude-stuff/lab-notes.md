@@ -423,20 +423,70 @@ prototype kernel + knowledge index + compact role format.
 
 ---
 
+### Exp 10 — Orchestration Rethink: From First Principles (2026-03-17)
+
+**Folder:** `exp10-orchestration-rethink/`
+
+**The question:** Is epic/story/task/DoD the best way to orchestrate
+agents? Or would completely different primitives work better?
+
+**What I found:**
+
+The HIERARCHY is right: goal → work unit → completion condition.
+Agents need this for the same reason humans do. The CONTENT of each
+piece is wrong for agents.
+
+**Audit of each piece:**
+
+| Piece | Human purpose | Agent purpose | Agent value | Fix |
+|-------|--------------|---------------|-------------|-----|
+| Epic | Motivation + scope | Scope boundary | Medium | Keep scope, compress narrative |
+| Story | Sprint chunk | Context-window chunk | High (different reason) | Keep, change content |
+| Tasks | Remind steps | Progress tracking | Low guidance, high tracking | Replace with progress log |
+| Acceptance criteria | Define "done" | Verify completion | CRITICAL | Make executable |
+| DoD | Quality floor | Self-verification | High (automated part) | Make it a script |
+| Role | Identity + patterns | Conventions only | Medium | Drop identity, keep patterns |
+
+**The single biggest improvement:** Make acceptance criteria executable.
+
+Change `Login endpoint works with valid credentials` to
+`RUN dart test test/auth/login_test.dart → EXIT 0`.
+
+This eliminates the largest source of agent errors: ambiguous success
+criteria. Everything else is refinement.
+
+**Three practical steps:**
+1. Executable acceptance criteria (biggest win)
+2. `.ai/verify.sh` as the DoD (medium effort, high value)
+3. Progress logging instead of pre-planned task checklists
+
+**What I would NOT change:** Keep calling them stories/epics. Keep
+YAML frontmatter. Keep file-based everything. Keep roles (just make
+content more structured). Don't rename for purity.
+
+---
+
 ### Running "I'd actually ship this" list
 
-1. `depends_on` frontmatter field (enables dependency graph)
-2. `.ai/bus/<epic>.bus` with typed entries (@CTX/@DEC/@WARN)
-3. `bus-parse` tool: query + export to human-readable markdown
-4. `## A2A` section as loading manifest (LOAD + IN + OUT + SCOPE)
-5. `ai-prep` script: generates A2A from prose + bus + role
-6. `.ai/boot.md` — 200-token kernel replacing CLAUDE.md as agent entry
-7. Knowledge index (`.ai/knowledge/index.md`) — topic → file mapping
-8. Role summary sections (100 tokens for Tier 2, full def for Tier 3)
-9. `critical: true` story flag for selective review/redundancy
-10. "Not in scope" as mandatory story section
-11. `ai-swarm plan` — visualize execution waves
-12. `ai-ready-queue` — auto-discover next stories to assign
-13. `ai-claim` — prevent double-assignment in parallel execution
-14. State machine engine for `ai-backlog` transition validation
-15. Signal files for ephemeral coordination events
+**The essentials (highest impact):**
+1. Executable acceptance criteria in stories (biggest single win)
+2. `.ai/verify.sh` — DoD as a runnable script
+3. `depends_on` frontmatter field (enables dependency graph)
+4. `.ai/bus/<epic>.bus` with typed entries (@CTX/@DEC/@WARN)
+5. `## A2A` section as loading manifest (LOAD + IN + OUT + SCOPE)
+6. "Not in scope" as mandatory story section
+
+**The tooling:**
+7. `bus-parse` tool: query + export to human-readable markdown
+8. `ai-prep` script: generates A2A from prose + bus + role
+9. `ai-swarm plan` — visualize execution waves
+10. `ai-ready-queue` — auto-discover next stories to assign
+11. `ai-claim` — prevent double-assignment in parallel execution
+12. State machine engine for `ai-backlog` transition validation
+
+**The scaling infrastructure:**
+13. `.ai/boot.md` — 200-token kernel for large projects
+14. Knowledge index (`.ai/knowledge/index.md`)
+15. Role summary sections (compact for Tier 2 loading)
+16. Signal files for ephemeral coordination events
+17. `critical: true` flag for selective redundancy
