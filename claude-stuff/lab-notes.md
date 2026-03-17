@@ -263,12 +263,58 @@ planning — is nice tooling around those three primitives.
 
 ---
 
+### Exp 06 — Agent Communication Protocol (2026-03-17)
+
+**Folder:** `exp06-agent-communication/`
+
+**The question:** Is human language the best way for AI agents to
+communicate with each other? Or would a different format make us
+more efficient and less error-prone?
+
+**What I built:**
+- Side-by-side comparison of 6 formats for the same information
+  (pure prose, pure YAML, structured skeleton, code-as-communication,
+  diff-oriented, and a hybrid)
+- A formal Agent Communication Protocol (ACP) with 5 typed entries:
+  CONTEXT, REQUEST, DECISION, WARNING, STATUS
+- Before/after rewrite of an actual story and context file
+
+**The uncomfortable truth:**
+I don't think in natural language. I process tokens. Every ambiguous
+phrase costs me reasoning tokens to disambiguate. "Build the actual
+API endpoints per the contract, wired to the database" is 13 words
+but ~200 tokens of internal reasoning to figure out what "actual,"
+"the contract," and "wired to" mean concretely.
+
+**Key findings:**
+1. **Tables are the killer format.** Fewer tokens AND zero ambiguity
+   compared to prose. Use for schema, endpoints, artifacts, errors.
+2. **Typed entries beat chronological.** CONTEXT/DECISION/WARNING as
+   headers let agents scan and skip. Timestamps force reading everything.
+3. **"Not in scope" is the highest-value section.** Prevents gold-plating,
+   which is the most common agent mistake. Every story should have it.
+4. **File paths > references.** "`.ai/context/E001.md` → CONTEXT:
+   users-table" beats "check the shared context file for details."
+5. **Natural language only for "why."** Structure everything else.
+   The "Because" field in a DECISION is the right place for prose.
+
+**The meta-insight:**
+The format that's best for agents is just good technical writing.
+Tables, clear structure, explicit scope, concrete references. Agents
+NEED this to function. Humans benefit from it but can survive without
+it. Optimizing for agents forces better communication for everyone.
+
+---
+
 ### Running "I'd actually ship this" list
 
 1. `depends_on` frontmatter field (enables dependency graph)
-2. Shared context files (`.ai/context/<epic>.md`) — replaces handoffs
+2. Shared context files with typed entries (CONTEXT/DECISION/WARNING)
 3. `critical: true` story flag for selective review/redundancy
-4. `ai-swarm plan` — visualize execution waves
-5. State machine engine for `ai-backlog` transition validation
-6. `ai-ready-queue` — auto-discover next stories to assign
-7. `ai-claim` — prevent double-assignment in parallel execution
+4. Story template with REQUEST format (Input/Output/Constraints/Not-in-scope)
+5. "Not in scope" as mandatory story section
+6. `ai-swarm plan` — visualize execution waves
+7. State machine engine for `ai-backlog` transition validation
+8. `ai-ready-queue` — auto-discover next stories to assign
+9. `ai-claim` — prevent double-assignment in parallel execution
+10. ACP reference in role definitions
